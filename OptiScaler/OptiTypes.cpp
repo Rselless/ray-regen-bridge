@@ -81,6 +81,9 @@ std::string UpscalerDisplayName(Upscaler upscaler, API api)
 
     case Upscaler::DLSSD:
         return "DLSSD";
+
+    case Upscaler::FSRD:
+        return "FSR Ray Regeneration";
     }
 
     return "????";
@@ -120,6 +123,9 @@ std::string UpscalerShortName(Upscaler upscaler)
 
     case Upscaler::DLSSD:
         return "DLSSD";
+
+    case Upscaler::FSRD:
+        return "FSR-RR";
     }
 
     return "????";
@@ -152,6 +158,8 @@ std::string UpscalerToCode(Upscaler upscaler)
         return "dlss_12";
     case Upscaler::DLSSD:
         return "dlssd";
+    case Upscaler::FSRD:
+        return "fsrd";
     case Upscaler::FSR31: // DX11 only
         return "fsr31";
     default: // Upscaler::Reset and unknown
@@ -168,7 +176,8 @@ Upscaler CodeToUpscaler(const std::string& code)
         { "fsr22", Upscaler::FSR22 },       { "fsr22_12", Upscaler::FSR22_on12 },
         { "ffx", Upscaler::FFX },           { "ffx_12", Upscaler::FFX_on12 },
         { "dlss", Upscaler::DLSS },         { "dlss_12", Upscaler::DLSS_on12 },
-        { "dlssd", Upscaler::DLSSD },       { "fsr31", Upscaler::FSR31 },
+        { "dlssd", Upscaler::DLSSD },       { "fsrd", Upscaler::FSRD },
+        { "fsr31", Upscaler::FSR31 },
         { "fsr31_12", Upscaler::FFX_on12 }, // for compat reasons
     };
 

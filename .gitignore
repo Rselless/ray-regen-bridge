@@ -440,3 +440,26 @@ CyberFSR/imgui.ini
 /OptiScaler/resource_build_commit.h
 /OptiScaler/misc/Telemetry.cpp
 /OptiScaler/misc/Telemetry.h
+
+# fsrd-ray-regen: only source code goes in, never builds, binaries, dumps or our notes
+x64/
+*.dll
+*.pdb
+*.7z
+*.dmp
+*.log
+
+# AMD and NVIDIA runtime DLLs (redundant with *.dll, kept explicit)
+amd_*.dll
+amdxc*.dll
+ffx_*.dll
+libxess*.dll
+libxell*.dll
+nvngx*.dll
+_nvngx*.dll
+nvapi*.dll
+sl.*.dll
+
+# Markdown: only README.md (already tracked .md files stay tracked)
+*.md
+!README.md

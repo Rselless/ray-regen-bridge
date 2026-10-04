@@ -513,6 +513,8 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="upscalers\dlssd\DLSSDFeature.h" />
     <ClInclude Include="upscalers\dlssd\DLSSDFeature_Dx11.h" />
     <ClInclude Include="upscalers\dlssd\DLSSDFeature_Dx12.h" />
+    <ClInclude Include="upscalers\fsrd\FSRDFeatureDx12.h" />
+    <ClInclude Include="upscalers\fsrd\ffx_denoiser_compat.h" />
     <ClInclude Include="upscalers\dlssd\DLSSDFeature_Vk.h" />
     <ClInclude Include="upscalers\dlss\DLSSFeature.h" />
     <ClInclude Include="upscalers\dlss\DLSSFeature_Dx11.h" />
@@ -581,8 +583,11 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="shaders\bias\Bias_Common.h" />
     <ClInclude Include="shaders\bias\Bias_Dx11.h" />
     <ClInclude Include="shaders\bias\Bias_Dx12.h" />
+    <ClInclude Include="shaders\fsrd\FsrdPass_Dx12.h" />
     <ClInclude Include="shaders\bias\precompile\Bias_Shader.h" />
     <ClInclude Include="shaders\bias\precompile\Bias_Shader_Dx11.h" />
+    <ClInclude Include="shaders\fsrd\precompile\fsrd_prepass_Shader.h" />
+    <ClInclude Include="shaders\fsrd\precompile\fsrd_compose_Shader.h" />
     <ClInclude Include="shaders\format_transfer\FT_Common.h" />
     <ClInclude Include="shaders\format_transfer\FT_Dx12.h" />
     <ClInclude Include="shaders\output_scaling\fsr1\FSR_EASU_Shader.h" />
@@ -772,6 +777,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="upscalers\dlssd\DLSSDFeature.cpp" />
     <ClCompile Include="upscalers\dlssd\DLSSDFeature_Dx11.cpp" />
     <ClCompile Include="upscalers\dlssd\DLSSDFeature_Dx12.cpp" />
+    <ClCompile Include="upscalers\fsrd\FSRDFeatureDx12.cpp" />
     <ClCompile Include="upscalers\dlssd\DLSSDFeature_Vk.cpp" />
     <ClCompile Include="upscalers\dlss\DLSSFeature.cpp" />
     <ClCompile Include="upscalers\dlss\DLSSFeature_Dx11.cpp" />
@@ -854,6 +860,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="scanner\scanner.cpp" />
     <ClCompile Include="shaders\bias\Bias_Dx11.cpp" />
     <ClCompile Include="shaders\bias\Bias_Dx12.cpp" />
+    <ClCompile Include="shaders\fsrd\FsrdPass_Dx12.cpp" />
     <ClCompile Include="shaders\format_transfer\FT_Dx12.cpp" />
     <ClCompile Include="shaders\output_scaling\OS_Dx11.cpp" />
     <ClCompile Include="shaders\output_scaling\OS_Dx12.cpp" />

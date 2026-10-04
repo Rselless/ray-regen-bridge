@@ -22,6 +22,7 @@
 #include "detours/detours.h"
 #include <ankerl/unordered_dense.h>
 #include <misc/IdentifyGpu.h>
+#include <proxies/FfxApi_Proxy.h>
 
 static ankerl::unordered_dense::map<unsigned int, ContextData<IFeature_Dx12>> Dx12Contexts;
 static std::unordered_map<unsigned int, NVSDK_NGX_Feature> HandleToFeature;
@@ -903,7 +904,13 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_D3D12_GetFeatureRequirements(
     const bool isFG = FeatureDiscoveryInfo->FeatureID == NVSDK_NGX_Feature_FrameGeneration;
     const bool dlssgAdjacent = Nvngx_FG::isDx12Available() || State::Instance().activeFgInput == FGInput::DLSSG;
 
-    if (isUpscaling || (isFG && dlssgAdjacent))
+    // Ray Reconstruction is served by FSR Ray Regeneration (FSRDFeatureDx12) on GPUs without real DLSS-D.
+    // Streamline's sl.dlss_d disables itself (adapter mask 0) unless this reports Supported.
+    const bool isRR = FeatureDiscoveryInfo->FeatureID == NVSDK_NGX_Feature_RayReconstruction;
+    const bool fsrdAvailable = isRR && !IdentifyGpu::getPrimaryGpu().dlssCapable &&
+                               FfxApiProxy::InitFfxDx12_Denoiser() && FfxApiProxy::Dx12Module_Denoiser() != nullptr;
+
+    if (isUpscaling || (isFG && dlssgAdjacent) || fsrdAvailable)
     {
         if (OutSupported == nullptr)
         {

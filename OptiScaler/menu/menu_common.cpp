@@ -34,6 +34,7 @@
 #include <memory>
 #include <type_traits>
 #include <misc/IdentifyGpu.h>
+#include <upscalers/fsrd/FSRDFeatureDx12.h>
 #include <hooks/Xell_Hooks.h>
 #include <low_latency/input/input_common.h>
 
@@ -330,6 +331,8 @@ inline void MenuCommon::ReInitUpscaler()
 
     if (State::Instance().currentFeature->GetUpscalerType() == Upscaler::DLSSD)
         State::Instance().newBackend = Upscaler::DLSSD;
+    else if (State::Instance().currentFeature->GetUpscalerType() == Upscaler::FSRD)
+        State::Instance().newBackend = Upscaler::FSRD;
     else
         State::Instance().newBackend = currentBackend;
 
@@ -2672,6 +2675,104 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                 ImGui::Spacing();
                 ImGui::Spacing();
             }
+        }
+
+        // FSRD -----------------
+        if (currentFeature->GetUpscalerType() == Upscaler::FSRD)
+        {
+            ImGui::SeparatorText("FSR Ray Regeneration");
+
+            if (auto fsrd = dynamic_cast<FSRDFeatureDx12*>(currentFeature); fsrd != nullptr)
+            {
+                if (fsrd->DenoiserActive())
+                    ImGui::TextColored(toneMapColor(ImVec4(0.f, 1.f, 0.25f, 1.f)), "Denoiser active");
+                else
+                    ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)),
+                                       "Denoiser off, only upscaling (see OptiScaler.log)");
+            }
+
+            ImGui::PushItemWidth(220.0f * menuResScale);
+
+            const char* splitModes[] = { "Albedo ratio", "All specular", "Roughness weighted" };
+            int splitMode = std::clamp(config->FsrdSplitMode.value_or_default(), 0, 2);
+
+            if (ImGui::Combo("Signal Split", &splitMode, splitModes, IM_ARRAYSIZE(splitModes)))
+                config->FsrdSplitMode = splitMode;
+
+            ShowHelpMarker("How the game's noisy image is split between the diffuse and specular denoisers\n"
+                           "Albedo ratio: by diffuse vs specular albedo\n"
+                           "All specular: everything through the roughness aware specular denoiser\n"
+                           "Roughness weighted: smooth surfaces specular (sharper reflections), rough ones by albedo");
+
+            float hitDistance = config->FsrdDiffuseHitDistance.value_or_default();
+            if (ImGui::SliderFloat("Diffuse Hit Distance", &hitDistance, 0.1f, 100.0f, "%.1f",
+                                   ImGuiSliderFlags_Logarithmic))
+                config->FsrdDiffuseHitDistance = hitDistance;
+
+            ShowHelpMarker("DLSS-RR doesn't provide one, used for the diffuse signal\n"
+                           "Larger is smoother, smaller keeps more contact detail");
+
+            float reflectionReactive = config->FsrdReflectionReactive.value_or_default();
+            if (ImGui::SliderFloat("Reflection Reactive", &reflectionReactive, 0.0f, 1.0f, "%.2f"))
+                config->FsrdReflectionReactive = reflectionReactive;
+
+            ShowHelpMarker("Reduces the upscaler's ghosting on reflections\n"
+                           "Higher trusts the current frame more on smooth reflective surfaces\n"
+                           "0 only uses the game's own reactive mask");
+
+            float hitScale = config->FsrdSpecHitDistanceScale.value_or_default();
+            if (ImGui::SliderFloat("Spec Hit Distance Scale", &hitScale, 0.01f, 1000.0f, "%.2f",
+                                   ImGuiSliderFlags_Logarithmic))
+                config->FsrdSpecHitDistanceScale = hitScale;
+
+            ShowHelpMarker("Multiplier for the game's specular ray hit distance\n"
+                           "Used to reproject reflections, a wrong scale causes ghosting and noisy mirrors");
+
+            bool roughnessOverride = config->FsrdRoughnessOverrideEnabled.value_or_default();
+            if (ImGui::Checkbox("Override Roughness", &roughnessOverride))
+                config->FsrdRoughnessOverrideEnabled = roughnessOverride;
+
+            ShowHelpMarker("Diagnostic: use a constant roughness for every surface instead of the game's");
+
+            if (roughnessOverride)
+            {
+                float roughness = config->FsrdRoughnessOverride.value_or_default();
+                if (ImGui::SliderFloat("Roughness", &roughness, 0.0f, 1.0f, "%.2f"))
+                    config->FsrdRoughnessOverride = roughness;
+            }
+
+            // Filled with the denoiser's defaults once its context exists
+            if (config->FsrdStabilityBias.has_value())
+            {
+                float stability = config->FsrdStabilityBias.value();
+                if (ImGui::SliderFloat("Stability Bias", &stability, 0.0f, 1.0f, "%.2f"))
+                    config->FsrdStabilityBias = stability;
+
+                ShowHelpMarker("Higher is more stable (less flicker) but slower to react");
+            }
+
+            if (config->FsrdRadianceClipStdK.has_value())
+            {
+                float clip = config->FsrdRadianceClipStdK.value();
+                if (ImGui::SliderFloat("Radiance Clip", &clip, 0.5f, 100.0f, "%.1f", ImGuiSliderFlags_Logarithmic))
+                    config->FsrdRadianceClipStdK = clip;
+
+                ShowHelpMarker("Lower clamps bright outliers (fireflies, blotches) harder");
+            }
+
+            if (config->FsrdKernelRelaxation.has_value())
+            {
+                float relaxation = config->FsrdKernelRelaxation.value();
+                if (ImGui::SliderFloat("Kernel Relaxation", &relaxation, 0.0f, 1.0f, "%.2f"))
+                    config->FsrdKernelRelaxation = relaxation;
+
+                ShowHelpMarker("Gaussian kernel relaxation of the spatial filter");
+            }
+
+            ImGui::PopItemWidth();
+
+            ImGui::Spacing();
+            ImGui::Spacing();
         }
 
         // FFX -----------------
@@ -5889,6 +5990,8 @@ void MenuCommon::RenderActiveImageSettings(RenderMenuContext& ctx)
                     const bool usesDlssd = currentFeature->GetUpscalerType() == Upscaler::DLSSD;
                     if (usesDlssd)
                         state.newBackend = Upscaler::DLSSD;
+                    else if (currentFeature->GetUpscalerType() == Upscaler::FSRD)
+                        state.newBackend = Upscaler::FSRD;
                     else
                         state.newBackend = currentBackend;
 

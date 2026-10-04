@@ -294,6 +294,21 @@ class Config
     CustomOptional<uint32_t> DLSSDRenderPresetPerformance { 0 };
     CustomOptional<uint32_t> DLSSDRenderPresetUltraPerformance { 0 };
 
+    // FSRD (FSR Ray Regeneration, used in place of DLSSD on non-DLSS GPUs)
+    CustomOptional<bool> FsrdEnableDenoiser { true };
+    CustomOptional<bool> FsrdDebugView { false };
+    CustomOptional<float> FsrdDiffuseHitDistance { 10.0f };
+    CustomOptional<int> FsrdSplitMode { 2 }; // 0 albedo ratio, 1 all specular, 2 roughness weighted
+    CustomOptional<float> FsrdReflectionReactive { 0.7f }; // reactive mask strength on smooth reflections
+    CustomOptional<float> FsrdSpecHitDistanceScale { 1.0f }; // multiplier for the game's specular hit distance
+    // Diagnostic, menu only: replace the game's roughness with a constant
+    CustomOptional<bool> FsrdRoughnessOverrideEnabled { false };
+    CustomOptional<float> FsrdRoughnessOverride { 0.2f };
+    // Denoiser tuning, unset means the denoiser's own default (filled in as a volatile value once it's queried)
+    CustomOptional<float, NoDefault> FsrdStabilityBias;
+    CustomOptional<float, NoDefault> FsrdRadianceClipStdK;
+    CustomOptional<float, NoDefault> FsrdKernelRelaxation;
+
     // Nukems
     CustomOptional<bool> NvngxFGMakeDepthCopy { false };
 

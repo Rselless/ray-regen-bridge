@@ -7,6 +7,7 @@
 #include <ankerl/unordered_dense.h>
 #include <misc/IdentifyGpu.h>
 #include <framegen/nvngx/Nvngx_FG.h>
+#include <proxies/FfxApi_Proxy.h>
 
 /// @brief Calculates the resolution scaling ratio override based on the provided quality level and current
 /// configuration.
@@ -795,8 +796,13 @@ void InitNGXParameters(NVSDK_NGX_Parameter* InParams, API api)
             InParams->Set("SuperSamplingDenoising.MinDriverVersionMinor", 0);
         }
 
-        InParams->Set("SuperSamplingDenoising.Available", 0);
-        InParams->Set("SuperSamplingDenoising.FeatureInitResult", 0);
+        // On DX12, Ray Reconstruction requests are served by FSR Ray Regeneration (FSRDFeatureDx12) when
+        // amd_fidelityfx_denoiser_dx12.dll is available, so let the game enable it
+        const bool fsrdAvailable = api == API::DX12 && FfxApiProxy::InitFfxDx12_Denoiser() &&
+                                   FfxApiProxy::Dx12Module_Denoiser() != nullptr;
+
+        InParams->Set("SuperSamplingDenoising.Available", fsrdAvailable ? 1 : 0);
+        InParams->Set("SuperSamplingDenoising.FeatureInitResult", fsrdAvailable ? 1 : 0);
     }
 
     if ((api == API::DX12 || api == API::Vulkan) && (State::Instance().activeFgInput == FGInput::DLSSG ||

@@ -23,7 +23,7 @@ class FFXFeatureDx12 : public FFXFeature, public IFeature_Dx12
     bool QueryProviders(ID3D12Device* device);
 
     feature_version Version() override { return FFXFeature::Version(); }
-    Upscaler GetUpscalerType() const final { return Upscaler::FFX; }
+    Upscaler GetUpscalerType() const override { return Upscaler::FFX; }
     API Api() const override { return IFeature_Dx12::Api(); }
     bool CallsUpscalerEndByItself() override { return IFeature_Dx12::CallsUpscalerEndByItself(); }
     std::optional<double> ReadUpscalerTime(void* commandQueue) override

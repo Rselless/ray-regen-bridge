@@ -1,0 +1,96 @@
+// FSRD prepass: builds FSR Ray Regeneration's inputs from what DLSS-RR receives (see fsrd_common.hlsli).
+// Game resources are only read, every output is an FSRD scratch texture.
+
+#include "fsrd_common.hlsli"
+
+Texture2D<float4> Color : register(t0);
+Texture2D<float4> DiffuseAlbedo : register(t1);
+Texture2D<float4> SpecularAlbedo : register(t2);
+Texture2D<float4> Normals : register(t3);
+Texture2D<float> Roughness : register(t4);
+Texture2D<float> Depth : register(t5);
+Texture2D<float> SpecularHitDistance : register(t6);
+Texture2D<float4> MotionVectors : register(t7);
+
+RWTexture2D<float4> DiffuseSignal : register(u0);
+RWTexture2D<float4> SpecularSignal : register(u1);
+RWTexture2D<float> LinearDepthOut : register(u2);
+RWTexture2D<float4> PackedNormals : register(u3);
+RWTexture2D<float4> MotionVectorsOut : register(u4);
+
+// FFX wants the signed linear depth delta in MV.z, which DLSS doesn't have. It's computed by reprojecting the pixel
+// as static geometry with the previous view matrix; pixels whose game MV disagrees with that (characters, first
+// person arms) are moving and get 0, which is right for anything attached to the camera.
+float4 BuildMotionVector(uint2 pixel, float viewZ, bool sky)
+{
+    float2 mv = MotionVectors.Load(int3(uint2(float2(pixel) * MvTexelScale), 0)).xy * MvScale;
+
+    if (sky || HasPrevView == 0 || !all(!isnan(mv)))
+        return float4(isnan(mv.x) ? 0.0f : mv.x, isnan(mv.y) ? 0.0f : mv.y, 0.0f, 0.0f);
+
+    float2 uv = (float2(pixel) + 0.5f) / float2(RenderWidth, RenderHeight);
+    float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
+    float4 v = float4(ndc.x * viewZ * InvProj.x, ndc.y * viewZ * InvProj.y, viewZ, 1.0f);
+
+    float3 prev = float3(dot(v, PrevViewX), dot(v, PrevViewY), dot(v, PrevViewZ));
+
+    if (prev.z <= 1e-4f)
+        return float4(mv, 0.0f, 0.0f);
+
+    float2 prevNdc = float2(prev.x / (prev.z * InvProj.x), prev.y / (prev.z * InvProj.y));
+    float2 prevUv = float2(prevNdc.x * 0.5f + 0.5f, 0.5f - prevNdc.y * 0.5f);
+
+    float depthDelta = length((prevUv - uv) - mv) <= MaxStaticMvError ? prev.z - viewZ : 0.0f;
+    return float4(mv, depthDelta, 0.0f);
+}
+
+[numthreads(16, 16, 1)]
+void CSMain(uint3 DTid : SV_DispatchThreadID)
+{
+    if (DTid.x >= RenderWidth || DTid.y >= RenderHeight)
+        return;
+
+    int3 p = int3(DTid.xy, 0);
+
+    float3 color = Color.Load(p).rgb;
+    float hwDepth = Depth.Load(p);
+    float4 n = Normals.Load(p);
+
+    // World space normal, roughness in normals.w when packed (DLSS.Roughness.Mode 1)
+    float3 normal = n.xyz;
+    float len = length(normal);
+    normal = len > 1e-5f ? normal / len : float3(0.0f, 0.0f, 1.0f);
+    float roughness = (Flags & FLAG_SEPARATE_ROUGHNESS) ? Roughness.Load(p) : n.w;
+
+    if (RoughnessOverride >= 0.0f)
+        roughness = RoughnessOverride;
+
+    float viewZ = LinearDepth(hwDepth);
+
+    PackedNormals[DTid.xy] = float4(NormalToOctahedronUv(normal), saturate(roughness), 0.0f);
+    LinearDepthOut[DTid.xy] = viewZ;
+    MotionVectorsOut[DTid.xy] = BuildMotionVector(DTid.xy, viewZ, IsSky(hwDepth) || viewZ >= SkyDepth);
+
+    float3 dMod, sMod;
+    float albedoRatio;
+
+    if (!GetModulation(DiffuseAlbedo.Load(p).rgb, SpecularAlbedo.Load(p).rgb, hwDepth, dMod, sMod, albedoRatio) ||
+        !IsFinite3(color))
+    {
+        // Negative hit distance marks the texel as inactive for the denoiser
+        DiffuseSignal[DTid.xy] = float4(0.0f, 0.0f, 0.0f, -1.0f);
+        SpecularSignal[DTid.xy] = float4(0.0f, 0.0f, 0.0f, -1.0f);
+        return;
+    }
+
+    color = max(color, 0.0f);
+
+    float specHit = (Flags & FLAG_HAS_SPEC_HIT_DISTANCE) ? SpecularHitDistance.Load(p) * SpecHitScale
+                                                         : DiffuseHitDistance;
+    specHit = (specHit > 0.0f && !isnan(specHit)) ? min(specHit, 65504.0f) : 65504.0f;
+
+    float wd = DiffuseWeight(albedoRatio, saturate(roughness));
+
+    DiffuseSignal[DTid.xy] = float4(color * wd / dMod, DiffuseHitDistance);
+    SpecularSignal[DTid.xy] = float4(color * (1.0f - wd) / sMod, specHit);
+}

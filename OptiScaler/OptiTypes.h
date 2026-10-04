@@ -67,6 +67,8 @@ enum class Upscaler
     DLSS_on12, // DX12 dlss using interops
 
     DLSSD, // "dlssd", used for the DLSS-D/Ray Reconstruction upscaler+denoiser backend
+
+    FSRD, // "fsrd", FSR Ray Regeneration -- used in place of DLSSD on GPUs without real DLSS-D (e.g. AMD)
     Reset
 };
 

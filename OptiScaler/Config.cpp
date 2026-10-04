@@ -393,6 +393,29 @@ bool Config::Reload(std::filesystem::path iniPath)
                 DLSSDRenderPresetUltraPerformance.set_from_config(setting);
         }
 
+        // FSRD
+        {
+            FsrdEnableDenoiser.set_from_config(readBool("FSRD", "EnableDenoiser"));
+            FsrdDebugView.set_from_config(readBool("FSRD", "DebugView"));
+
+            if (auto setting = readFloat("FSRD", "DiffuseHitDistance"); setting.has_value() && setting.value() > 0.0f)
+                FsrdDiffuseHitDistance.set_from_config(setting);
+
+            if (auto setting = readInt("FSRD", "SplitMode"); setting.has_value() && setting >= 0 && setting <= 2)
+                FsrdSplitMode.set_from_config(setting);
+
+            if (auto setting = readFloat("FSRD", "ReflectionReactive");
+                setting.has_value() && setting.value() >= 0.0f && setting.value() <= 1.0f)
+                FsrdReflectionReactive.set_from_config(setting);
+
+            if (auto setting = readFloat("FSRD", "SpecHitDistanceScale"); setting.has_value() && setting.value() > 0.0f)
+                FsrdSpecHitDistanceScale.set_from_config(setting);
+
+            FsrdStabilityBias.set_from_config(readFloat("FSRD", "StabilityBias"));
+            FsrdRadianceClipStdK.set_from_config(readFloat("FSRD", "RadianceClipStdK"));
+            FsrdKernelRelaxation.set_from_config(readFloat("FSRD", "KernelRelaxation"));
+        }
+
         // NvngxFG
         {
             if (auto setting = readBool("Nukems", "MakeDepthCopy"); setting.has_value() && setting.value())
@@ -1205,6 +1228,26 @@ bool Config::SaveIni()
                      GetIntValue(Instance()->DLSSDRenderPresetPerformance.value_for_config()).c_str());
         ini.SetValue("DLSSD", "RenderPresetUltraPerformance",
                      GetIntValue(Instance()->DLSSDRenderPresetUltraPerformance.value_for_config()).c_str());
+    }
+
+    // FSRD
+    {
+        ini.SetValue("FSRD", "EnableDenoiser",
+                     GetBoolValue(Instance()->FsrdEnableDenoiser.value_for_config()).c_str());
+        ini.SetValue("FSRD", "DebugView", GetBoolValue(Instance()->FsrdDebugView.value_for_config()).c_str());
+        ini.SetValue("FSRD", "DiffuseHitDistance",
+                     GetFloatValue(Instance()->FsrdDiffuseHitDistance.value_for_config()).c_str());
+        ini.SetValue("FSRD", "SplitMode", GetIntValue(Instance()->FsrdSplitMode.value_for_config()).c_str());
+        ini.SetValue("FSRD", "ReflectionReactive",
+                     GetFloatValue(Instance()->FsrdReflectionReactive.value_for_config()).c_str());
+        ini.SetValue("FSRD", "SpecHitDistanceScale",
+                     GetFloatValue(Instance()->FsrdSpecHitDistanceScale.value_for_config()).c_str());
+        ini.SetValue("FSRD", "StabilityBias",
+                     GetFloatValue(Instance()->FsrdStabilityBias.value_for_config()).c_str());
+        ini.SetValue("FSRD", "RadianceClipStdK",
+                     GetFloatValue(Instance()->FsrdRadianceClipStdK.value_for_config()).c_str());
+        ini.SetValue("FSRD", "KernelRelaxation",
+                     GetFloatValue(Instance()->FsrdKernelRelaxation.value_for_config()).c_str());
     }
 
     // NvngxFG
