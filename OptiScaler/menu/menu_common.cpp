@@ -1649,10 +1649,17 @@ void MenuCommon::RenderProbeCaptureOverlay(RenderMenuContext& ctx)
     {
         ImGui::SetWindowFontScale(1.5f);
 
-        if (fsrd->ProbeCapturePending())
+        if (fsrd->ProbeCapturePending() && fsrd->ProbeCaptureCountdown() > 0.0f)
         {
             ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)), "FSRD capture '%s' starts in %.1f s",
                                fsrd->ProbeCaptureLabel(), fsrd->ProbeCaptureCountdown());
+        }
+        else if (fsrd->ProbeCapturePending())
+        {
+            // Start time passed but no FSRD frame picked it up: the denoiser isn't running
+            ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.5f, 0.f, 1.f)),
+                               "FSRD capture '%s' waiting: no denoiser frames (Ray Reconstruction off?)",
+                               fsrd->ProbeCaptureLabel());
         }
         else if (const float remaining = fsrd->ProbeCaptureRemaining(); remaining > 0.0f)
         {

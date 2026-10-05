@@ -1036,7 +1036,12 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
     _resetDenoiserHistory = false;
 
     if (_debugView)
+    {
+        // The probe reads the inputs, which are the same in debug view
+        ProbeInputs(InCommandList, specularHitDistance, normals, diffuseAlbedo, specularAlbedo, viewRows,
+                    renderWidth, renderHeight);
         return _composedColor;
+    }
 
     // 3. Compose: denoised signals * albedo -> composed color
     ResourceBarrier(InCommandList, _diffuseOut, write, read);
