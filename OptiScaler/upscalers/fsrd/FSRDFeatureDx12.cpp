@@ -278,7 +278,8 @@ bool FSRDFeatureDx12::CreateDenoiserContext()
     } tunables[] = { { &Config::Instance()->FsrdStabilityBias, FFX_API_CONFIGURE_DENOISER_KEY_STABILITY_BIAS },
                      { &Config::Instance()->FsrdRadianceClipStdK, FFX_API_CONFIGURE_DENOISER_KEY_RADIANCE_CLIP_STD_K },
                      { &Config::Instance()->FsrdKernelRelaxation,
-                       FFX_API_CONFIGURE_DENOISER_KEY_GAUSSIAN_KERNEL_RELAXATION } };
+                       FFX_API_CONFIGURE_DENOISER_KEY_GAUSSIAN_KERNEL_RELAXATION },
+                     { &Config::Instance()->FsrdMaxRadiance, FFX_API_CONFIGURE_DENOISER_KEY_MAX_RADIANCE } };
 
     for (auto& tunable : tunables)
     {
@@ -406,9 +407,10 @@ void FSRDFeatureDx12::ApplyTuning()
         { &config->FsrdStabilityBias, FFX_API_CONFIGURE_DENOISER_KEY_STABILITY_BIAS },
         { &config->FsrdRadianceClipStdK, FFX_API_CONFIGURE_DENOISER_KEY_RADIANCE_CLIP_STD_K },
         { &config->FsrdKernelRelaxation, FFX_API_CONFIGURE_DENOISER_KEY_GAUSSIAN_KERNEL_RELAXATION },
+        { &config->FsrdMaxRadiance, FFX_API_CONFIGURE_DENOISER_KEY_MAX_RADIANCE },
     };
 
-    for (int i = 0; i < 3; i++)
+    for (int i = 0; i < 4; i++)
     {
         if (!tunables[i].first->has_value())
             continue;

@@ -417,6 +417,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             FsrdStabilityBias.set_from_config(readFloat("FSRD", "StabilityBias"));
             FsrdRadianceClipStdK.set_from_config(readFloat("FSRD", "RadianceClipStdK"));
             FsrdKernelRelaxation.set_from_config(readFloat("FSRD", "KernelRelaxation"));
+            FsrdMaxRadiance.set_from_config(readFloat("FSRD", "MaxRadiance"));
         }
 
         // NvngxFG
@@ -1252,6 +1253,7 @@ bool Config::SaveIni()
                      GetFloatValue(Instance()->FsrdRadianceClipStdK.value_for_config()).c_str());
         ini.SetValue("FSRD", "KernelRelaxation",
                      GetFloatValue(Instance()->FsrdKernelRelaxation.value_for_config()).c_str());
+        ini.SetValue("FSRD", "MaxRadiance", GetFloatValue(Instance()->FsrdMaxRadiance.value_for_config()).c_str());
     }
 
     // NvngxFG

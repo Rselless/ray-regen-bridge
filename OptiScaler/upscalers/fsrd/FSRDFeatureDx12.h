@@ -46,8 +46,8 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     float _prevView[4][4] {};
 
     // Tuning values last sent with ffxConfigure (a flag, not NaN: the project builds with /fp:fast)
-    float _appliedTuning[3] {};
-    bool _tuningSent[3] {};
+    float _appliedTuning[4] {};
+    bool _tuningSent[4] {};
 
     // Scratch resources, all owned by this class (no aliasing between inputs and outputs)
     ID3D12Resource* _diffuseIn = nullptr;

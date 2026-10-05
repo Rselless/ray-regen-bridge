@@ -311,6 +311,7 @@ class Config
     CustomOptional<float, NoDefault> FsrdStabilityBias;
     CustomOptional<float, NoDefault> FsrdRadianceClipStdK;
     CustomOptional<float, NoDefault> FsrdKernelRelaxation;
+    CustomOptional<float, NoDefault> FsrdMaxRadiance;
 
     // Nukems
     CustomOptional<bool> NvngxFGMakeDepthCopy { false };

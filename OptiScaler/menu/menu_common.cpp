@@ -2885,6 +2885,18 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                 ShowHelpMarker("Gaussian kernel relaxation of the spatial filter");
             }
 
+            if (config->FsrdMaxRadiance.has_value())
+            {
+                float maxRadiance = config->FsrdMaxRadiance.value();
+                if (ImGui::SliderFloat("Max Radiance", &maxRadiance, 0.1f, 65504.0f, "%.1f",
+                                       ImGuiSliderFlags_Logarithmic))
+                    config->FsrdMaxRadiance = maxRadiance;
+
+                ShowHelpMarker("Highest radiance the denoiser keeps\n"
+                               "Signals are divided by albedo, so dark surfaces and fog get high values;\n"
+                               "too low a value clamps them (fog disappearing, dark outlines)");
+            }
+
             ImGui::PopItemWidth();
 
             ImGui::Spacing();
