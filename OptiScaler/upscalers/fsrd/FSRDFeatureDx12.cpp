@@ -429,7 +429,8 @@ void FSRDFeatureDx12::ApplyTuning()
 
 void FSRDFeatureDx12::ProbeInputs(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* specularHitDistance,
                                   ID3D12Resource* normals, ID3D12Resource* diffuseAlbedo,
-                                  ID3D12Resource* specularAlbedo, unsigned int renderWidth, unsigned int renderHeight)
+                                  ID3D12Resource* specularAlbedo, const float view[4][4], unsigned int renderWidth,
+                                  unsigned int renderHeight)
 {
     if (++_probeFrame % ProbeInterval != 0)
         return;
@@ -460,6 +461,12 @@ void FSRDFeatureDx12::ProbeInputs(ID3D12GraphicsCommandList* cmdList, ID3D12Reso
 
         if (SUCCEEDED(_probeReadback->Map(0, &range, (void**) &data)))
         {
+            // Camera axes in world space are the columns of the row-vector view rotation
+            const auto& v = _probeView[otherSlot];
+            LOG_INFO("Probe camera: right ({:.3f}, {:.3f}, {:.3f}), up ({:.3f}, {:.3f}, {:.3f}), "
+                     "forward ({:.3f}, {:.3f}, {:.3f})",
+                     v[0][0], v[1][0], v[2][0], v[0][1], v[1][1], v[2][1], v[0][2], v[1][2], v[2][2]);
+
             for (int i = 0; i < ProbePointCount; i++)
             {
                 const uint8_t* texels = data + otherSlot * ProbeSlotSize + i * ProbeTexelsPerPoint * ProbeTexelPitch;
@@ -478,11 +485,19 @@ void FSRDFeatureDx12::ProbeInputs(ID3D12GraphicsCommandList* cmdList, ID3D12Reso
                          ProbePoints[i][0], ProbePoints[i][1],
                          _probeHasHitDistance[otherSlot] ? std::to_string(hitDistance) : std::string("n/a"),
                          linearDepth, HalfToFloat(packed[2]));
-                LOG_INFO("    game normals: ({:.3f}, {:.3f}, {:.3f}, {:.3f}), diffuse albedo: ({}, {}, {}, {}), "
-                         "specular albedo: ({}, {}, {}, {})",
-                         HalfToFloat(gameNormals[0]), HalfToFloat(gameNormals[1]), HalfToFloat(gameNormals[2]),
-                         HalfToFloat(gameNormals[3]), diffuse[0], diffuse[1], diffuse[2], diffuse[3], specular[0],
-                         specular[1], specular[2], specular[3]);
+                const float n[3] = { HalfToFloat(gameNormals[0]), HalfToFloat(gameNormals[1]),
+                                     HalfToFloat(gameNormals[2]) };
+
+                // If the game's normals are world space, this is them in view space: n * R (row vector)
+                const float nv[3] = { n[0] * v[0][0] + n[1] * v[1][0] + n[2] * v[2][0],
+                                      n[0] * v[0][1] + n[1] * v[1][1] + n[2] * v[2][1],
+                                      n[0] * v[0][2] + n[1] * v[1][2] + n[2] * v[2][2] };
+
+                LOG_INFO("    game normals: ({:.3f}, {:.3f}, {:.3f}, {:.3f}) len {:.3f}, as view space: "
+                         "({:.3f}, {:.3f}, {:.3f}), diffuse albedo: ({}, {}, {}, {}), specular albedo: ({}, {}, {}, {})",
+                         n[0], n[1], n[2], HalfToFloat(gameNormals[3]),
+                         sqrtf(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]), nv[0], nv[1], nv[2], diffuse[0], diffuse[1],
+                         diffuse[2], diffuse[3], specular[0], specular[1], specular[2], specular[3]);
             }
 
             D3D12_RANGE noWrite { 0, 0 };
@@ -558,6 +573,7 @@ void FSRDFeatureDx12::ProbeInputs(ID3D12GraphicsCommandList* cmdList, ID3D12Reso
 
     _probeSlotWritten[slot] = true;
     _probeHasHitDistance[slot] = sources[0] != nullptr;
+    memcpy(_probeView[slot], view, sizeof(_probeView[slot]));
 }
 
 void FSRDFeatureDx12::LogInputsOnce(NVSDK_NGX_Parameter* InParameters)
@@ -947,7 +963,7 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
         return nullptr;
     }
 
-    ProbeInputs(InCommandList, specularHitDistance, normals, diffuseAlbedo, specularAlbedo, renderWidth,
+    ProbeInputs(InCommandList, specularHitDistance, normals, diffuseAlbedo, specularAlbedo, viewRows, renderWidth,
                 renderHeight);
 
     return _composedColor;

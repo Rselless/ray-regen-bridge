@@ -77,9 +77,10 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     uint32_t _probeFrame = 0;
     bool _probeSlotWritten[2] {};
     bool _probeHasHitDistance[2] {};
+    float _probeView[2][4][4] {}; // WorldToViewMatrix of each round, to tell world from view space normals
     void ProbeInputs(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* specularHitDistance, ID3D12Resource* normals,
-                     ID3D12Resource* diffuseAlbedo, ID3D12Resource* specularAlbedo, unsigned int renderWidth,
-                     unsigned int renderHeight);
+                     ID3D12Resource* diffuseAlbedo, ID3D12Resource* specularAlbedo, const float view[4][4],
+                     unsigned int renderWidth, unsigned int renderHeight);
 
     void LogInputsOnce(NVSDK_NGX_Parameter* InParameters);
     void ProcessInitParams(NVSDK_NGX_Parameter* InParameters);
