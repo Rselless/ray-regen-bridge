@@ -38,6 +38,12 @@ class FsrdPass_Dx12 : public Shader_Dx12
         float GameMaskBias;
         float SpecHitScale;
         float RoughnessOverride;
+
+        float CameraForward[3];
+        uint32_t SentinelMode;
+
+        uint32_t CounterSlot;
+        float Pad3[3];
     };
 
   private:

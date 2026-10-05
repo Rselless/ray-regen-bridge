@@ -48,7 +48,9 @@ constexpr int ProbePointCount = 5;
 // hit distance, linear depth, packed normals, game normals, diffuse albedo, specular albedo
 constexpr int ProbeTexelsPerPoint = 6;
 constexpr UINT ProbeTexelPitch = D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT; // 512, also covers the 256 row pitch
-constexpr UINT ProbeSlotSize = ProbePointCount * ProbeTexelsPerPoint * ProbeTexelPitch;
+// Per slot: the point texels, then one texel with the frame's sentinel count
+constexpr UINT ProbeCounterOffset = ProbePointCount * ProbeTexelsPerPoint * ProbeTexelPitch;
+constexpr UINT ProbeSlotSize = ProbeCounterOffset + ProbeTexelPitch;
 constexpr uint32_t ProbeInterval = 120;
 constexpr uint32_t ProbeCaptureInterval = 8; // ~7 samples/s at 60 fps, still several frames for the GPU copy
 
@@ -326,7 +328,9 @@ bool FSRDFeatureDx12::CreateScratchResources()
            CreateScratchTexture(Device, w, h, ScratchFormat, write, L"FSRD_SpecularOut", &_specularOut) &&
            CreateScratchTexture(Device, w, h, DXGI_FORMAT_R32_FLOAT, read, L"FSRD_LinearDepth", &_linearDepth) &&
            CreateScratchTexture(Device, w, h, ScratchFormat, read, L"FSRD_PackedNormals", &_packedNormals) &&
-           CreateScratchTexture(Device, w, h, ScratchFormat, read, L"FSRD_MotionVectors", &_motionVectors);
+           CreateScratchTexture(Device, w, h, ScratchFormat, read, L"FSRD_MotionVectors", &_motionVectors) &&
+           CreateScratchTexture(Device, 2, 1, DXGI_FORMAT_R32_UINT, write, L"FSRD_SentinelCounter",
+                                &_sentinelCounter);
 }
 
 void FSRDFeatureDx12::ReleaseScratchResources()
@@ -338,6 +342,7 @@ void FSRDFeatureDx12::ReleaseScratchResources()
     SAFE_RELEASE(_linearDepth);
     SAFE_RELEASE(_packedNormals);
     SAFE_RELEASE(_motionVectors);
+    SAFE_RELEASE(_sentinelCounter);
     SAFE_RELEASE(_composedColor);
     SAFE_RELEASE(_reactiveMask);
     SAFE_RELEASE(_probeReadback);
@@ -455,6 +460,13 @@ void FSRDFeatureDx12::FinishProbeCapture()
                  st.viewNormalSum[2] / c);
     }
 
+    if (_captureSentinelCount > 0)
+    {
+        LOG_INFO("[cap #{} {}] sentinel pixels: min {:.2f}%, avg {:.2f}%, max {:.2f}% over {} samples", id, label,
+                 _captureSentinelMin, _captureSentinelSum / _captureSentinelCount, _captureSentinelMax,
+                 _captureSentinelCount);
+    }
+
     LOG_INFO("=== Probe capture #{} '{}' end ===", id, label);
 
     _captureActive = false;
@@ -485,6 +497,11 @@ void FSRDFeatureDx12::ProbeInputs(ID3D12GraphicsCommandList* cmdList, ID3D12Reso
 
         for (auto& st : _captureStats)
             st = ProbeStats {};
+
+        _captureSentinelMin = 1e30f;
+        _captureSentinelMax = -1e30f;
+        _captureSentinelSum = 0.0f;
+        _captureSentinelCount = 0;
 
         _captureActive = true;
         _probeFrame = 0;
@@ -598,6 +615,24 @@ void FSRDFeatureDx12::ProbeInputs(ID3D12GraphicsCommandList* cmdList, ID3D12Reso
                 }
             }
 
+            uint32_t sentinels = 0;
+            memcpy(&sentinels, data + otherSlot * ProbeSlotSize + ProbeCounterOffset, sizeof(sentinels));
+
+            if (_probePixels[otherSlot] > 0)
+            {
+                const float percent = 100.0f * (float) sentinels / (float) _probePixels[otherSlot];
+                LOG_INFO("{}Probe sentinel pixels: {:.2f}% ({} of {})", tag, percent, sentinels,
+                         _probePixels[otherSlot]);
+
+                if (inCapture)
+                {
+                    _captureSentinelMin = std::min(_captureSentinelMin, percent);
+                    _captureSentinelMax = std::max(_captureSentinelMax, percent);
+                    _captureSentinelSum += percent;
+                    _captureSentinelCount++;
+                }
+            }
+
             D3D12_RANGE noWrite { 0, 0 };
             _probeReadback->Unmap(0, &noWrite);
         }
@@ -669,6 +704,30 @@ void FSRDFeatureDx12::ProbeInputs(ID3D12GraphicsCommandList* cmdList, ID3D12Reso
             ResourceBarrier(cmdList, source, copy, read);
     }
 
+    // This frame's sentinel count, written by the prepass
+    if (_sentinelCounter != nullptr)
+    {
+        const auto uav = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        ResourceBarrier(cmdList, _sentinelCounter, uav, copy);
+
+        D3D12_TEXTURE_COPY_LOCATION dst {};
+        dst.pResource = _probeReadback;
+        dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        dst.PlacedFootprint.Offset = slot * ProbeSlotSize + ProbeCounterOffset;
+        dst.PlacedFootprint.Footprint = { DXGI_FORMAT_R32_UINT, 1, 1, 1, D3D12_TEXTURE_DATA_PITCH_ALIGNMENT };
+
+        D3D12_TEXTURE_COPY_LOCATION src {};
+        src.pResource = _sentinelCounter;
+        src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        src.SubresourceIndex = 0;
+
+        D3D12_BOX box { _probeCounterSlot, 0, 0, _probeCounterSlot + 1, 1, 1 };
+        cmdList->CopyTextureRegion(&dst, 0, 0, 0, &src, &box);
+
+        ResourceBarrier(cmdList, _sentinelCounter, copy, uav);
+    }
+
+    _probePixels[slot] = renderWidth * renderHeight;
     _probeSlotWritten[slot] = true;
     _probeHasHitDistance[slot] = sources[0] != nullptr;
     memcpy(_probeView[slot], view, sizeof(_probeView[slot]));
@@ -791,8 +850,8 @@ bool FSRDFeatureDx12::InitInternal(ID3D12GraphicsCommandList* InCommandList, NVS
     _maxRenderWidth = std::max(RenderWidth(), DisplayWidth());
     _maxRenderHeight = std::max(RenderHeight(), DisplayHeight());
 
-    _prepass = std::make_unique<FsrdPass_Dx12>("FSRD Prepass", Device, 8, 5, fsrd_prepass_cso, sizeof(fsrd_prepass_cso));
-    _compose = std::make_unique<FsrdPass_Dx12>("FSRD Compose", Device, 8, 2, fsrd_compose_cso, sizeof(fsrd_compose_cso));
+    _prepass = std::make_unique<FsrdPass_Dx12>("FSRD Prepass", Device, 8, 6, fsrd_prepass_cso, sizeof(fsrd_prepass_cso));
+    _compose = std::make_unique<FsrdPass_Dx12>("FSRD Compose", Device, 9, 2, fsrd_compose_cso, sizeof(fsrd_compose_cso));
 
     if (!_prepass->CanRender() || !_compose->CanRender() || !CreateScratchResources() || !CreateDenoiserContext())
     {
@@ -889,6 +948,24 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
     constants.ReflectionReactive = std::clamp(Config::Instance()->FsrdReflectionReactive.value_or_default(), 0.0f, 1.0f);
     constants.GameMaskBias = Config::Instance()->DlssReactiveMaskBias.value_or_default();
     constants.SpecHitScale = std::max(Config::Instance()->FsrdSpecHitDistanceScale.value_or_default(), 0.0001f);
+    // Read every frame so the menu applies immediately; the history doesn't fit the other mode
+    const int sentinelMode = std::clamp(Config::Instance()->FsrdSentinelMode.value_or_default(), 0, 1);
+
+    if (sentinelMode != _lastSentinelMode)
+    {
+        LOG_INFO("Sentinel pixels mode: {}", sentinelMode == 0 ? "passthrough" : "diffuse");
+        _lastSentinelMode = sentinelMode;
+        _resetDenoiserHistory = true;
+    }
+
+    // Camera forward in world space: third column of the row-vector view rotation
+    constants.CameraForward[0] = viewRows[0][2];
+    constants.CameraForward[1] = viewRows[1][2];
+    constants.CameraForward[2] = viewRows[2][2];
+    constants.SentinelMode = (uint32_t) sentinelMode;
+    _probeCounterSlot = _sentinelFrame++ % 2;
+    constants.CounterSlot = _probeCounterSlot;
+
     constants.RoughnessOverride = Config::Instance()->FsrdRoughnessOverrideEnabled.value_or_default()
                                       ? std::clamp(Config::Instance()->FsrdRoughnessOverride.value_or_default(), 0.0f, 1.0f)
                                       : -1.0f;
@@ -930,8 +1007,8 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
         InCommandList,
         { color, diffuseAlbedo, specularAlbedo, normals, separateRoughness ? roughness : nullptr, depth,
           specularHitDistance, motionVectors },
-        { _diffuseIn, _specularIn, _linearDepth, _packedNormals, _motionVectors }, constants, renderWidth,
-        renderHeight);
+        { _diffuseIn, _specularIn, _linearDepth, _packedNormals, _motionVectors, _sentinelCounter }, constants,
+        renderWidth, renderHeight);
 
     for (auto resource : prepassOutputs)
         ResourceBarrier(InCommandList, resource, write, read);
@@ -1053,7 +1130,8 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
 
     const bool composeOk = _compose->Dispatch(
         InCommandList,
-        { color, diffuseAlbedo, specularAlbedo, depth, _diffuseOut, _specularOut, gameReactive, _packedNormals },
+        { color, diffuseAlbedo, specularAlbedo, depth, _diffuseOut, _specularOut, gameReactive, _packedNormals,
+          normals },
         { _composedColor, _reactiveMask }, constants, (UINT) composedDesc.Width, composedDesc.Height);
 
     ResourceBarrier(InCommandList, _diffuseOut, read, write);

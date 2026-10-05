@@ -16,6 +16,7 @@ Texture2D<float4> DiffuseDenoised : register(t4);
 Texture2D<float4> SpecularDenoised : register(t5);
 Texture2D<float> GameReactive : register(t6);    // DLSS.Input.Bias.Current.Color.Mask, null reads 0
 Texture2D<float4> PackedNormals : register(t7);  // prepass output, roughness in B
+Texture2D<float4> GameNormals : register(t8);    // game's GBuffer.Normals, only for the sentinel test
 
 RWTexture2D<float4> Output : register(u0);
 RWTexture2D<float> Reactive : register(u1);
@@ -41,11 +42,24 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
 
     float gameReactive = saturate(GameReactive.Load(p) * GameMaskBias);
 
+    const float3 diffuseAlbedo = DiffuseAlbedo.Load(p).rgb;
+    const float3 specularAlbedo = SpecularAlbedo.Load(p).rgb;
+
+    if (IsSentinel(GameNormals.Load(p), diffuseAlbedo, specularAlbedo))
+    {
+        // Same choice as the prepass: game color, or the denoised diffuse signal (white albedo, no remodulation)
+        const float3 denoised = DiffuseDenoised.Load(p).rgb;
+        const bool diffuse = SentinelMode == SENTINEL_DIFFUSE && IsFinite3(denoised) && IsFinite3(color.rgb);
+
+        Output[DTid.xy] = diffuse ? float4(max(denoised, 0.0f), color.a) : color;
+        Reactive[DTid.xy] = gameReactive;
+        return;
+    }
+
     float3 dMod, sMod;
     float albedoRatio;
 
-    if (!GetModulation(DiffuseAlbedo.Load(p).rgb, SpecularAlbedo.Load(p).rgb, Depth.Load(p), dMod, sMod, albedoRatio) ||
-        !IsFinite3(color.rgb))
+    if (!GetModulation(diffuseAlbedo, specularAlbedo, Depth.Load(p), dMod, sMod, albedoRatio) || !IsFinite3(color.rgb))
     {
         Output[DTid.xy] = color;
         Reactive[DTid.xy] = gameReactive;

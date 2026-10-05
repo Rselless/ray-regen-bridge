@@ -17,6 +17,7 @@ RWTexture2D<float4> SpecularSignal : register(u1);
 RWTexture2D<float> LinearDepthOut : register(u2);
 RWTexture2D<float4> PackedNormals : register(u3);
 RWTexture2D<float4> MotionVectorsOut : register(u4);
+RWTexture2D<uint> SentinelCounter : register(u5); // 2x1, [CounterSlot] counts this frame, the other is cleared
 
 // FFX wants the signed linear depth delta in MV.z, which DLSS doesn't have. It's computed by reprojecting the pixel
 // as static geometry with the previous view matrix; pixels whose game MV disagrees with that (characters, first
@@ -55,6 +56,19 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
     float3 color = Color.Load(p).rgb;
     float hwDepth = Depth.Load(p);
     float4 n = Normals.Load(p);
+    float3 diffuseAlbedo = DiffuseAlbedo.Load(p).rgb;
+    float3 specularAlbedo = SpecularAlbedo.Load(p).rgb;
+
+    const bool sentinel = IsSentinel(n, diffuseAlbedo, specularAlbedo);
+
+    // Count sentinel texels for the log, one atomic per wave
+    if (all(DTid.xy == 0))
+        SentinelCounter[uint2(1 - CounterSlot, 0)] = 0;
+
+    const uint waveSentinels = WaveActiveCountBits(sentinel);
+
+    if (WaveIsFirstLane() && waveSentinels > 0)
+        InterlockedAdd(SentinelCounter[uint2(CounterSlot, 0)], waveSentinels);
 
     // World space normal, roughness in normals.w when packed (DLSS.Roughness.Mode 1)
     float3 normal = n.xyz;
@@ -65,17 +79,33 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
     if (RoughnessOverride >= 0.0f)
         roughness = RoughnessOverride;
 
+    // Sentinel texels denoised as diffuse: no real normal, so face the camera and be fully rough
+    if (sentinel && SentinelMode == SENTINEL_DIFFUSE)
+    {
+        normal = -normalize(CameraForward);
+        roughness = 1.0f;
+    }
+
     float viewZ = LinearDepth(hwDepth);
 
     PackedNormals[DTid.xy] = float4(NormalToOctahedronUv(normal), saturate(roughness), 0.0f);
     LinearDepthOut[DTid.xy] = viewZ;
     MotionVectorsOut[DTid.xy] = BuildMotionVector(DTid.xy, viewZ, IsSky(hwDepth) || viewZ >= SkyDepth);
 
+    if (sentinel)
+    {
+        // Passthrough: inactive for the denoiser, compose keeps the game's color. Diffuse: albedo is white, so
+        // the color goes undemodulated through the diffuse signal only.
+        const bool diffuse = SentinelMode == SENTINEL_DIFFUSE && IsFinite3(color);
+        DiffuseSignal[DTid.xy] = diffuse ? float4(max(color, 0.0f), DiffuseHitDistance) : float4(0.0f, 0.0f, 0.0f, -1.0f);
+        SpecularSignal[DTid.xy] = float4(0.0f, 0.0f, 0.0f, -1.0f);
+        return;
+    }
+
     float3 dMod, sMod;
     float albedoRatio;
 
-    if (!GetModulation(DiffuseAlbedo.Load(p).rgb, SpecularAlbedo.Load(p).rgb, hwDepth, dMod, sMod, albedoRatio) ||
-        !IsFinite3(color))
+    if (!GetModulation(diffuseAlbedo, specularAlbedo, hwDepth, dMod, sMod, albedoRatio) || !IsFinite3(color))
     {
         // Negative hit distance marks the texel as inactive for the denoiser
         DiffuseSignal[DTid.xy] = float4(0.0f, 0.0f, 0.0f, -1.0f);

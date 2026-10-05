@@ -36,7 +36,16 @@ cbuffer Params : register(b0)
     float GameMaskBias;       // compose: same scale OptiScaler applies to DLSS.Input.Bias.Current.Color.Mask
     float SpecHitScale;       // prepass: multiplier for the game's specular hit distance
     float RoughnessOverride;  // prepass: >= 0 replaces the game's roughness (diagnostic)
+
+    float3 CameraForward;     // world space, for sentinel texels denoised as diffuse
+    uint SentinelMode;        // SENTINEL_PASSTHROUGH or SENTINEL_DIFFUSE
+
+    uint CounterSlot;         // prepass: SentinelCounter texel counted this frame, the other one is cleared
+    float3 Pad3;
 };
+
+#define SENTINEL_PASSTHROUGH 0
+#define SENTINEL_DIFFUSE 1
 
 #define SPLIT_ALBEDO 0
 #define SPLIT_SPECULAR 1
@@ -99,6 +108,15 @@ float DiffuseWeight(float albedoRatio, float roughness)
         return albedoRatio * smoothstep(0.15f, 0.6f, roughness);
 
     return albedoRatio;
+}
+
+// Cyberpunk writes these texels without G-buffer data (V's own body, first person arms and weapon, some far
+// proxies): normal (-1, -1, -1) normalized, w (roughness) 0 and white diffuse and specular albedo. All three are
+// required so a real white, perfectly smooth surface facing that way isn't caught.
+bool IsSentinel(float4 normals, float3 diffuseAlbedo, float3 specularAlbedo)
+{
+    return all(abs(normals.xyz + 0.57735f) < 0.01f) && normals.w <= 1e-4f && all(diffuseAlbedo > 0.99f) &&
+           all(specularAlbedo > 0.99f);
 }
 
 float2 NormalToOctahedronUv(float3 N)

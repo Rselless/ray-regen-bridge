@@ -2826,6 +2826,17 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
             ShowHelpMarker("Multiplier for the game's specular ray hit distance\n"
                            "Used to reproject reflections, a wrong scale causes ghosting and noisy mirrors");
 
+            const char* sentinelModes[] = { "Passthrough", "Denoise as diffuse" };
+            int sentinelMode = std::clamp(config->FsrdSentinelMode.value_or_default(), 0, 1);
+
+            if (ImGui::Combo("Sentinel Pixels", &sentinelMode, sentinelModes, IM_ARRAYSIZE(sentinelModes)))
+                config->FsrdSentinelMode = sentinelMode;
+
+            ShowHelpMarker("Pixels the game sends without G-buffer data\n"
+                           "(V's body, first person arms and weapon, some far objects)\n"
+                           "Passthrough: keep the game's color, no denoise\n"
+                           "Denoise as diffuse: normal facing the camera, fully rough");
+
             bool roughnessOverride = config->FsrdRoughnessOverrideEnabled.value_or_default();
             if (ImGui::Checkbox("Override Roughness", &roughnessOverride))
                 config->FsrdRoughnessOverrideEnabled = roughnessOverride;

@@ -411,6 +411,9 @@ bool Config::Reload(std::filesystem::path iniPath)
             if (auto setting = readFloat("FSRD", "SpecHitDistanceScale"); setting.has_value() && setting.value() > 0.0f)
                 FsrdSpecHitDistanceScale.set_from_config(setting);
 
+            if (auto setting = readInt("FSRD", "SentinelMode"); setting.has_value() && setting >= 0 && setting <= 1)
+                FsrdSentinelMode.set_from_config(setting);
+
             FsrdStabilityBias.set_from_config(readFloat("FSRD", "StabilityBias"));
             FsrdRadianceClipStdK.set_from_config(readFloat("FSRD", "RadianceClipStdK"));
             FsrdKernelRelaxation.set_from_config(readFloat("FSRD", "KernelRelaxation"));
@@ -1242,6 +1245,7 @@ bool Config::SaveIni()
                      GetFloatValue(Instance()->FsrdReflectionReactive.value_for_config()).c_str());
         ini.SetValue("FSRD", "SpecHitDistanceScale",
                      GetFloatValue(Instance()->FsrdSpecHitDistanceScale.value_for_config()).c_str());
+        ini.SetValue("FSRD", "SentinelMode", GetIntValue(Instance()->FsrdSentinelMode.value_for_config()).c_str());
         ini.SetValue("FSRD", "StabilityBias",
                      GetFloatValue(Instance()->FsrdStabilityBias.value_for_config()).c_str());
         ini.SetValue("FSRD", "RadianceClipStdK",
