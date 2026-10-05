@@ -2702,10 +2702,10 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
 
                 if (remaining > 0.0f)
                 {
-                    ImGui::TextColored(toneMapColor(ImVec4(0.3f, 0.8f, 1.f, 1.f)), "Capturando #%d: %.1f s",
+                    ImGui::TextColored(toneMapColor(ImVec4(0.3f, 0.8f, 1.f, 1.f)), "Capturing #%d: %.1f s",
                                        fsrd->ProbeCaptureCount(), remaining);
                 }
-                else if (ImGui::Button("Iniciar captura (10 s)"))
+                else if (ImGui::Button("Start capture (10 s)"))
                 {
                     fsrd->StartProbeCapture(captureLabel);
                 }

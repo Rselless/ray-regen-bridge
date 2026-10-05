@@ -123,7 +123,7 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     bool DenoiserActive() const { return !_denoiserDisabled && _denoiserContextCreated; }
 
     // Diagnostic capture of the probe for ProbeCaptureSeconds, started from the menu
-    static constexpr const char* ProbeCaptureLabels[] = { "parado", "chao", "horizonte", "andando", "livre" };
+    static constexpr const char* ProbeCaptureLabels[] = { "still", "floor", "horizon", "walking", "free" };
     static constexpr int ProbeCaptureLabelCount = 5;
     static constexpr float ProbeCaptureSeconds = 10.0f;
 
