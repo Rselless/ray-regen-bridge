@@ -1227,7 +1227,23 @@ bool FSRDFeatureDx12::EvaluateInternal(ID3D12GraphicsCommandList* InCommandList,
         _resetDenoiserHistory = true;
     }
 
-    if (!bypass && !_denoiserDisabled && _denoiserContextCreated)
+    // Debug: upscale DLSSD.ColorBeforeParticles as is, to see what the game puts in it
+    bool rawView = false;
+
+    if (Config::Instance()->FsrdParticleLayer.value_or_default() == 3)
+    {
+        auto rawParticles = GetResource(InParameters, DlssdKeys::ColorBeforeParticles);
+
+        if (rawParticles != nullptr)
+        {
+            composed = rawParticles;
+            rawView = true;
+            _lastParticleLayer = 3;
+            _resetDenoiserHistory = true;
+        }
+    }
+
+    if (composed == nullptr && !bypass && !_denoiserDisabled && _denoiserContextCreated)
         composed = Denoise(InCommandList, InParameters);
 
     if (composed == nullptr)
@@ -1240,14 +1256,14 @@ bool FSRDFeatureDx12::EvaluateInternal(ID3D12GraphicsCommandList* InCommandList,
 
     InParameters->Set(NVSDK_NGX_Parameter_Color, composed);
 
-    if (!_debugView)
+    if (!_debugView && !rawView)
         InParameters->Set("FSR.reactive", _reactiveMask);
 
     auto result = FFXFeatureDx12::EvaluateInternal(InCommandList, InParameters);
 
     InParameters->Set(NVSDK_NGX_Parameter_Color, gameColor);
 
-    if (!_debugView)
+    if (!_debugView && !rawView)
         InParameters->Set("FSR.reactive", gameFsrReactive);
 
     return result;
