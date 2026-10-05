@@ -62,6 +62,7 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     ID3D12Resource* _sentinelCounter = nullptr; // 2x1 R32_UINT, sentinel texels per frame, ping-ponged
     uint32_t _sentinelFrame = 0;
     int _lastSentinelMode = -1;
+    bool _wasBypassed = false;
 
     std::unique_ptr<FsrdPass_Dx12> _prepass;
     std::unique_ptr<FsrdPass_Dx12> _compose;

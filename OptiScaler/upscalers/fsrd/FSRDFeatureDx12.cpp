@@ -1157,7 +1157,17 @@ bool FSRDFeatureDx12::EvaluateInternal(ID3D12GraphicsCommandList* InCommandList,
 
     ID3D12Resource* composed = nullptr;
 
-    if (!_denoiserDisabled && _denoiserContextCreated)
+    // Menu bypass: upscale the game's color as is; the history is stale when it's turned off again
+    const bool bypass = Config::Instance()->FsrdBypassDenoiser.value_or_default();
+
+    if (bypass != _wasBypassed)
+    {
+        LOG_INFO("Denoiser bypass: {}", bypass);
+        _wasBypassed = bypass;
+        _resetDenoiserHistory = true;
+    }
+
+    if (!bypass && !_denoiserDisabled && _denoiserContextCreated)
         composed = Denoise(InCommandList, InParameters);
 
     if (composed == nullptr)

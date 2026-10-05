@@ -2837,6 +2837,13 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                            "Passthrough: keep the game's color, no denoise\n"
                            "Denoise as diffuse: normal facing the camera, fully rough");
 
+            bool bypassDenoiser = config->FsrdBypassDenoiser.value_or_default();
+            if (ImGui::Checkbox("Bypass denoiser (upscale only)", &bypassDenoiser))
+                config->FsrdBypassDenoiser = bypassDenoiser;
+
+            ShowHelpMarker("Diagnostic: skip FSR Ray Regeneration and upscale the game's noisy color,\n"
+                           "to compare with the denoiser in the same frame. Not saved to the ini.");
+
             bool roughnessOverride = config->FsrdRoughnessOverrideEnabled.value_or_default();
             if (ImGui::Checkbox("Override Roughness", &roughnessOverride))
                 config->FsrdRoughnessOverrideEnabled = roughnessOverride;

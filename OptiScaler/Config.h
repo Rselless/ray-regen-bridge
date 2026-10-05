@@ -304,6 +304,8 @@ class Config
     CustomOptional<int> FsrdSentinelMode { 0 };               // texels without G-buffer: 0 passthrough, 1 diffuse
     // Diagnostic, menu only: replace the game's roughness with a constant
     CustomOptional<bool> FsrdRoughnessOverrideEnabled { false };
+    // Diagnostic, menu only: skip the denoiser and upscale the game's color, for A/B in the same frame
+    CustomOptional<bool> FsrdBypassDenoiser { false };
     CustomOptional<float> FsrdRoughnessOverride { 0.2f };
     // Denoiser tuning, unset means the denoiser's own default (filled in as a volatile value once it's queried)
     CustomOptional<float, NoDefault> FsrdStabilityBias;
