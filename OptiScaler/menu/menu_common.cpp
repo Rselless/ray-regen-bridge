@@ -2689,6 +2689,30 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                 else
                     ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)),
                                        "Denoiser off, only upscaling (see OptiScaler.log)");
+
+                // Diagnostic capture: tags the probe lines in the log and writes a per point summary
+                static int captureLabel = 0;
+                ImGui::PushItemWidth(120.0f * menuResScale);
+                ImGui::Combo("##ProbeCaptureLabel", &captureLabel, FSRDFeatureDx12::ProbeCaptureLabels,
+                             FSRDFeatureDx12::ProbeCaptureLabelCount);
+                ImGui::PopItemWidth();
+                ImGui::SameLine();
+
+                const float remaining = fsrd->ProbeCaptureRemaining();
+
+                if (remaining > 0.0f)
+                {
+                    ImGui::TextColored(toneMapColor(ImVec4(0.3f, 0.8f, 1.f, 1.f)), "Capturando #%d: %.1f s",
+                                       fsrd->ProbeCaptureCount(), remaining);
+                }
+                else if (ImGui::Button("Iniciar captura (10 s)"))
+                {
+                    fsrd->StartProbeCapture(captureLabel);
+                }
+
+                ShowHelpMarker("Records the denoiser inputs at 5 screen points for 10 s\n"
+                               "(~7 samples/s) and writes a summary per point to OptiScaler.log.\n"
+                               "Close the menu right after pressing it so the capture sees gameplay.");
             }
 
             ImGui::PushItemWidth(220.0f * menuResScale);

@@ -16,6 +16,8 @@
 #include <upscalers/ffx/FFXFeature_Dx12.h>
 #include <shaders/fsrd/FsrdPass_Dx12.h>
 #include <memory>
+#include <atomic>
+#include <chrono>
 
 class FSRDFeatureDx12 : public FFXFeatureDx12
 {
@@ -78,6 +80,28 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     bool _probeSlotWritten[2] {};
     bool _probeHasHitDistance[2] {};
     float _probeView[2][4][4] {}; // WorldToViewMatrix of each round, to tell world from view space normals
+    uint32_t _probeRound = 0;
+    int _probeSlotCapture[2] {};   // capture id each slot was copied for, 0 = regular probe
+
+    // Timed capture started from the menu: faster sampling, tagged log lines and a per point summary at the end
+    struct ProbeStats
+    {
+        int count = 0;
+        float hitMin = 1e30f, hitMax = -1e30f;
+        float depthMin = 1e30f, depthMax = -1e30f;
+        float roughMin = 1e30f, roughMax = -1e30f;
+        float alphaMin = 1e30f, alphaMax = -1e30f;
+        float normalSum[3] {};
+        float viewNormalSum[3] {};
+    };
+
+    std::atomic<int> _captureRequest { -1 }; // label index, set by the menu thread
+    std::atomic<int64_t> _captureEndNs { 0 };
+    std::atomic<int> _captureId { 0 };
+    int _captureLabel = 0;
+    bool _captureActive = false;
+    ProbeStats _captureStats[5];
+    void FinishProbeCapture();
     void ProbeInputs(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* specularHitDistance, ID3D12Resource* normals,
                      ID3D12Resource* diffuseAlbedo, ID3D12Resource* specularAlbedo, const float view[4][4],
                      unsigned int renderWidth, unsigned int renderHeight);
@@ -97,6 +121,25 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
 
     // For the menu: false when the denoiser is off (config, missing dll, init or dispatch failures)
     bool DenoiserActive() const { return !_denoiserDisabled && _denoiserContextCreated; }
+
+    // Diagnostic capture of the probe for ProbeCaptureSeconds, started from the menu
+    static constexpr const char* ProbeCaptureLabels[] = { "parado", "chao", "horizonte", "andando", "livre" };
+    static constexpr int ProbeCaptureLabelCount = 5;
+    static constexpr float ProbeCaptureSeconds = 10.0f;
+
+    void StartProbeCapture(int labelIndex) { _captureRequest.store(labelIndex); }
+    int ProbeCaptureCount() const { return _captureId.load(); }
+
+    // Seconds left in the running capture, 0 when none is running
+    float ProbeCaptureRemaining() const
+    {
+        if (_captureRequest.load() >= 0)
+            return ProbeCaptureSeconds;
+
+        const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+        const auto left = _captureEndNs.load() - now;
+        return left > 0 ? (float) ((double) left / 1e9) : 0.0f;
+    }
 
     FSRDFeatureDx12(unsigned int InHandleId, NVSDK_NGX_Parameter* InParameters);
     ~FSRDFeatureDx12();

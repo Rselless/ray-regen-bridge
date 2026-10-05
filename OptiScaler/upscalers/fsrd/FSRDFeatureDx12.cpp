@@ -50,6 +50,7 @@ constexpr int ProbeTexelsPerPoint = 6;
 constexpr UINT ProbeTexelPitch = D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT; // 512, also covers the 256 row pitch
 constexpr UINT ProbeSlotSize = ProbePointCount * ProbeTexelsPerPoint * ProbeTexelPitch;
 constexpr uint32_t ProbeInterval = 120;
+constexpr uint32_t ProbeCaptureInterval = 8; // ~7 samples/s at 60 fps, still several frames for the GPU copy
 
 static float HalfToFloat(uint16_t h)
 {
@@ -427,15 +428,76 @@ void FSRDFeatureDx12::ApplyTuning()
     }
 }
 
+void FSRDFeatureDx12::FinishProbeCapture()
+{
+    const int id = _captureId.load();
+    const char* label = ProbeCaptureLabels[_captureLabel];
+
+    LOG_INFO("=== Probe capture #{} '{}' summary ===", id, label);
+
+    for (int i = 0; i < ProbePointCount; i++)
+    {
+        const auto& st = _captureStats[i];
+
+        if (st.count == 0)
+        {
+            LOG_INFO("[cap #{} {}] point ({:.2f}, {:.2f}): no samples", id, label, ProbePoints[i][0], ProbePoints[i][1]);
+            continue;
+        }
+
+        const float c = (float) st.count;
+        LOG_INFO("[cap #{} {}] point ({:.2f}, {:.2f}) {} samples: hit distance {:.3f}..{:.3f}, depth {:.3f}..{:.3f}, "
+                 "roughness used {:.3f}..{:.3f}, game normal w {:.3f}..{:.3f}, mean normal world ({:.3f}, {:.3f}, "
+                 "{:.3f}) view ({:.3f}, {:.3f}, {:.3f})",
+                 id, label, ProbePoints[i][0], ProbePoints[i][1], st.count, st.hitMin, st.hitMax, st.depthMin,
+                 st.depthMax, st.roughMin, st.roughMax, st.alphaMin, st.alphaMax, st.normalSum[0] / c,
+                 st.normalSum[1] / c, st.normalSum[2] / c, st.viewNormalSum[0] / c, st.viewNormalSum[1] / c,
+                 st.viewNormalSum[2] / c);
+    }
+
+    LOG_INFO("=== Probe capture #{} '{}' end ===", id, label);
+
+    _captureActive = false;
+    _captureEndNs.store(0);
+}
+
 void FSRDFeatureDx12::ProbeInputs(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* specularHitDistance,
                                   ID3D12Resource* normals, ID3D12Resource* diffuseAlbedo,
                                   ID3D12Resource* specularAlbedo, const float view[4][4], unsigned int renderWidth,
                                   unsigned int renderHeight)
 {
-    if (++_probeFrame % ProbeInterval != 0)
+    const auto now = std::chrono::steady_clock::now();
+
+    if (const int request = _captureRequest.exchange(-1); request >= 0 && request < ProbeCaptureLabelCount)
+    {
+        if (_captureActive)
+            FinishProbeCapture();
+
+        _captureLabel = request;
+        _captureId.fetch_add(1);
+
+        for (auto& st : _captureStats)
+            st = ProbeStats {};
+
+        _captureActive = true;
+        _probeFrame = 0;
+        const auto duration = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<float>(ProbeCaptureSeconds));
+        _captureEndNs.store((now + duration).time_since_epoch().count());
+
+        LOG_INFO("=== Probe capture #{} '{}' start ({} s) ===", _captureId.load(), ProbeCaptureLabels[_captureLabel],
+                 ProbeCaptureSeconds);
+    }
+
+    if (_captureActive && now.time_since_epoch().count() >= _captureEndNs.load())
+        FinishProbeCapture();
+
+    const uint32_t interval = _captureActive ? ProbeCaptureInterval : ProbeInterval;
+
+    if (++_probeFrame % interval != 0)
         return;
 
-    const int slot = (_probeFrame / ProbeInterval) % 2;
+    const int slot = _probeRound++ % 2;
     const int otherSlot = 1 - slot;
 
     if (_probeReadback == nullptr)
@@ -461,11 +523,17 @@ void FSRDFeatureDx12::ProbeInputs(ID3D12GraphicsCommandList* cmdList, ID3D12Reso
 
         if (SUCCEEDED(_probeReadback->Map(0, &range, (void**) &data)))
         {
+            // Only data copied during the running capture counts for its summary and gets its tag
+            const int slotCapture = _probeSlotCapture[otherSlot];
+            const bool inCapture = _captureActive && slotCapture == _captureId.load();
+            const std::string tag =
+                inCapture ? std::format("[cap #{} {}] ", slotCapture, ProbeCaptureLabels[_captureLabel]) : "";
+
             // Camera axes in world space are the columns of the row-vector view rotation
             const auto& v = _probeView[otherSlot];
-            LOG_INFO("Probe camera: right ({:.3f}, {:.3f}, {:.3f}), up ({:.3f}, {:.3f}, {:.3f}), "
+            LOG_INFO("{}Probe camera: right ({:.3f}, {:.3f}, {:.3f}), up ({:.3f}, {:.3f}, {:.3f}), "
                      "forward ({:.3f}, {:.3f}, {:.3f})",
-                     v[0][0], v[1][0], v[2][0], v[0][1], v[1][1], v[2][1], v[0][2], v[1][2], v[2][2]);
+                     tag, v[0][0], v[1][0], v[2][0], v[0][1], v[1][1], v[2][1], v[0][2], v[1][2], v[2][2]);
 
             for (int i = 0; i < ProbePointCount; i++)
             {
@@ -481,8 +549,9 @@ void FSRDFeatureDx12::ProbeInputs(ID3D12GraphicsCommandList* cmdList, ID3D12Reso
                 memcpy(diffuse, texels + 4 * ProbeTexelPitch, sizeof(diffuse));
                 memcpy(specular, texels + 5 * ProbeTexelPitch, sizeof(specular));
 
-                LOG_INFO("Probe ({:.2f}, {:.2f}): spec hit distance: {}, linear depth: {:.3f}, roughness used: {:.3f}",
-                         ProbePoints[i][0], ProbePoints[i][1],
+                LOG_INFO("{}Probe ({:.2f}, {:.2f}): spec hit distance: {}, linear depth: {:.3f}, roughness used: "
+                         "{:.3f}",
+                         tag, ProbePoints[i][0], ProbePoints[i][1],
                          _probeHasHitDistance[otherSlot] ? std::to_string(hitDistance) : std::string("n/a"),
                          linearDepth, HalfToFloat(packed[2]));
                 const float n[3] = { HalfToFloat(gameNormals[0]), HalfToFloat(gameNormals[1]),
@@ -493,11 +562,34 @@ void FSRDFeatureDx12::ProbeInputs(ID3D12GraphicsCommandList* cmdList, ID3D12Reso
                                       n[0] * v[0][1] + n[1] * v[1][1] + n[2] * v[2][1],
                                       n[0] * v[0][2] + n[1] * v[1][2] + n[2] * v[2][2] };
 
-                LOG_INFO("    game normals: ({:.3f}, {:.3f}, {:.3f}, {:.3f}) len {:.3f}, as view space: "
+                LOG_INFO("{}    game normals: ({:.3f}, {:.3f}, {:.3f}, {:.3f}) len {:.3f}, as view space: "
                          "({:.3f}, {:.3f}, {:.3f}), diffuse albedo: ({}, {}, {}, {}), specular albedo: ({}, {}, {}, {})",
-                         n[0], n[1], n[2], HalfToFloat(gameNormals[3]),
+                         tag, n[0], n[1], n[2], HalfToFloat(gameNormals[3]),
                          sqrtf(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]), nv[0], nv[1], nv[2], diffuse[0], diffuse[1],
                          diffuse[2], diffuse[3], specular[0], specular[1], specular[2], specular[3]);
+
+                if (inCapture)
+                {
+                    auto& st = _captureStats[i];
+                    const float rough = HalfToFloat(packed[2]);
+                    const float alpha = HalfToFloat(gameNormals[3]);
+
+                    st.count++;
+                    st.hitMin = std::min(st.hitMin, hitDistance);
+                    st.hitMax = std::max(st.hitMax, hitDistance);
+                    st.depthMin = std::min(st.depthMin, linearDepth);
+                    st.depthMax = std::max(st.depthMax, linearDepth);
+                    st.roughMin = std::min(st.roughMin, rough);
+                    st.roughMax = std::max(st.roughMax, rough);
+                    st.alphaMin = std::min(st.alphaMin, alpha);
+                    st.alphaMax = std::max(st.alphaMax, alpha);
+
+                    for (int c = 0; c < 3; c++)
+                    {
+                        st.normalSum[c] += n[c];
+                        st.viewNormalSum[c] += nv[c];
+                    }
+                }
             }
 
             D3D12_RANGE noWrite { 0, 0 };
@@ -574,6 +666,7 @@ void FSRDFeatureDx12::ProbeInputs(ID3D12GraphicsCommandList* cmdList, ID3D12Reso
     _probeSlotWritten[slot] = true;
     _probeHasHitDistance[slot] = sources[0] != nullptr;
     memcpy(_probeView[slot], view, sizeof(_probeView[slot]));
+    _probeSlotCapture[slot] = _captureActive ? _captureId.load() : 0;
 }
 
 void FSRDFeatureDx12::LogInputsOnce(NVSDK_NGX_Parameter* InParameters)
