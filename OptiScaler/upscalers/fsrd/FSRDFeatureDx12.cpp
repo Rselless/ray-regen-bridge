@@ -886,8 +886,9 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
     auto diffuseAlbedo = GetResource(InParameters, DlssdKeys::DiffuseAlbedo);
     auto specularAlbedo = GetResource(InParameters, DlssdKeys::SpecularAlbedo);
     ID3D12Resource* beforeParticles = nullptr;
+    int particleMode = std::clamp(Config::Instance()->FsrdParticleLayer.value_or_default(), 0, 2);
 
-    if (Config::Instance()->FsrdParticleLayer.value_or_default() && color != nullptr)
+    if (particleMode != 0 && color != nullptr)
     {
         beforeParticles = GetResource(InParameters, DlssdKeys::ColorBeforeParticles);
 
@@ -901,13 +902,21 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
         }
     }
 
+    if (beforeParticles == nullptr)
+        particleMode = 0;
+
     // The denoiser history holds the other color, start over when it changes
-    if ((beforeParticles != nullptr ? 1 : 0) != _lastParticleLayer)
+    if (particleMode != _lastParticleLayer)
     {
-        LOG_INFO("Particle layer: {}", beforeParticles != nullptr ? "denoising color before particles" : "off");
-        _lastParticleLayer = beforeParticles != nullptr ? 1 : 0;
+        LOG_INFO("Particle layer: {}", particleMode == 0 ? "off" : particleMode == 1 ? "add on top" : "denoised");
+        _lastParticleLayer = particleMode;
         _resetDenoiserHistory = true;
     }
+
+    // Cyberpunk only has steam/smoke in DLSSD.ColorBeforeParticles, so that's the final reference color; the
+    // denoiser gets it (mode 2) or the main color without them (mode 1, compose adds the difference back)
+    ID3D12Resource* outputColor = particleMode != 0 ? beforeParticles : color;
+    ID3D12Resource* denoiserColor = particleMode == 2 ? beforeParticles : color;
     auto specularHitDistance = GetResource(InParameters, DlssdKeys::SpecularHitDistance);
 
     if (color == nullptr || motionVectors == nullptr || depth == nullptr || normals == nullptr ||
@@ -1026,7 +1035,7 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
     constants.Flags = (separateRoughness ? FlagSeparateRoughness : 0) |
                       (specularHitDistance != nullptr ? FlagHasSpecHitDistance : 0) |
                       (DepthInverted() ? FlagDepthInverted : 0) |
-                      (beforeParticles != nullptr ? FlagParticleLayer : 0);
+                      (particleMode == 1 ? FlagParticleLayer : 0);
     constants.RenderWidth = renderWidth;
     constants.RenderHeight = renderHeight;
     constants.SkyDepth = SkyDepth;
@@ -1043,7 +1052,7 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
 
     const bool prepassOk = _prepass->Dispatch(
         InCommandList,
-        { beforeParticles != nullptr ? beforeParticles : color, diffuseAlbedo, specularAlbedo, normals,
+        { denoiserColor, diffuseAlbedo, specularAlbedo, normals,
           separateRoughness ? roughness : nullptr, depth,
           specularHitDistance, motionVectors },
         { _diffuseIn, _specularIn, _linearDepth, _packedNormals, _motionVectors, _sentinelCounter }, constants,
@@ -1169,8 +1178,8 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
 
     const bool composeOk = _compose->Dispatch(
         InCommandList,
-        { color, diffuseAlbedo, specularAlbedo, depth, _diffuseOut, _specularOut, gameReactive, _packedNormals,
-          normals, beforeParticles },
+        { outputColor, diffuseAlbedo, specularAlbedo, depth, _diffuseOut, _specularOut, gameReactive, _packedNormals,
+          normals, denoiserColor },
         { _composedColor, _reactiveMask }, constants, (UINT) composedDesc.Width, composedDesc.Height);
 
     ResourceBarrier(InCommandList, _diffuseOut, read, write);
@@ -1193,7 +1202,7 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
     // 4. Restore the low frequency part the denoiser removed (fog, haze)
     ResourceBarrier(InCommandList, _restoredColor, read, write);
 
-    const bool restoreOk = _restore->Dispatch(InCommandList, { color, _composedColor, _linearDepth },
+    const bool restoreOk = _restore->Dispatch(InCommandList, { outputColor, _composedColor, _linearDepth },
                                               { _restoredColor }, constants, (UINT) composedDesc.Width,
                                               composedDesc.Height);
 
