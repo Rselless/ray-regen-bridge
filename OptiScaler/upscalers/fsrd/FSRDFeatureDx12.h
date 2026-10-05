@@ -96,7 +96,10 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     };
 
     std::atomic<int> _captureRequest { -1 }; // label index, set by the menu thread
+    std::atomic<int64_t> _captureStartNs { 0 };
     std::atomic<int64_t> _captureEndNs { 0 };
+    std::atomic<int64_t> _captureDoneUntilNs { 0 };
+    std::atomic<int> _captureShownLabel { 0 }; // label of the pending/running/last capture, for the overlay
     std::atomic<int> _captureId { 0 };
     int _captureLabel = 0;
     bool _captureActive = false;
@@ -126,20 +129,49 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     static constexpr const char* ProbeCaptureLabels[] = { "still", "floor", "horizon", "walking", "free" };
     static constexpr int ProbeCaptureLabelCount = 5;
     static constexpr float ProbeCaptureSeconds = 10.0f;
+    static constexpr float ProbeCaptureDelaySeconds = 2.0f; // time to close the menu before sampling starts
+    static constexpr float ProbeCaptureDoneSeconds = 3.0f;  // how long the overlay says the capture is done
 
-    void StartProbeCapture(int labelIndex) { _captureRequest.store(labelIndex); }
+    // Starts ProbeCaptureDelaySeconds from now, so the menu can be closed first
+    void StartProbeCapture(int labelIndex)
+    {
+        _captureShownLabel.store(labelIndex);
+        _captureStartNs.store(NowNs() + SecondsToNs(ProbeCaptureDelaySeconds));
+        _captureRequest.store(labelIndex);
+    }
+
     int ProbeCaptureCount() const { return _captureId.load(); }
+    const char* ProbeCaptureLabel() const { return ProbeCaptureLabels[_captureShownLabel.load()]; }
+
+    // Seconds until a requested capture starts sampling, 0 when none is pending
+    float ProbeCaptureCountdown() const
+    {
+        return _captureRequest.load() >= 0 ? NsToSeconds(_captureStartNs.load() - NowNs()) : 0.0f;
+    }
+
+    bool ProbeCapturePending() const { return _captureRequest.load() >= 0; }
 
     // Seconds left in the running capture, 0 when none is running
     float ProbeCaptureRemaining() const
     {
-        if (_captureRequest.load() >= 0)
-            return ProbeCaptureSeconds;
-
-        const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
-        const auto left = _captureEndNs.load() - now;
-        return left > 0 ? (float) ((double) left / 1e9) : 0.0f;
+        return ProbeCapturePending() ? 0.0f : NsToSeconds(_captureEndNs.load() - NowNs());
     }
+
+    // True for a few seconds after a capture ends
+    bool ProbeCaptureJustDone() const { return NowNs() < _captureDoneUntilNs.load(); }
+
+  private:
+    static int64_t NowNs()
+    {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(
+                   std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    }
+
+    static int64_t SecondsToNs(float seconds) { return (int64_t) ((double) seconds * 1e9); }
+    static float NsToSeconds(int64_t ns) { return ns > 0 ? (float) ((double) ns / 1e9) : 0.0f; }
+
+  public:
 
     FSRDFeatureDx12(unsigned int InHandleId, NVSDK_NGX_Parameter* InParameters);
     ~FSRDFeatureDx12();

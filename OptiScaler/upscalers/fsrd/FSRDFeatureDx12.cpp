@@ -459,6 +459,7 @@ void FSRDFeatureDx12::FinishProbeCapture()
 
     _captureActive = false;
     _captureEndNs.store(0);
+    _captureDoneUntilNs.store(NowNs() + SecondsToNs(ProbeCaptureDoneSeconds));
 }
 
 void FSRDFeatureDx12::ProbeInputs(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* specularHitDistance,
@@ -466,9 +467,15 @@ void FSRDFeatureDx12::ProbeInputs(ID3D12GraphicsCommandList* cmdList, ID3D12Reso
                                   ID3D12Resource* specularAlbedo, const float view[4][4], unsigned int renderWidth,
                                   unsigned int renderHeight)
 {
-    const auto now = std::chrono::steady_clock::now();
+    const int64_t nowNs = NowNs();
 
-    if (const int request = _captureRequest.exchange(-1); request >= 0 && request < ProbeCaptureLabelCount)
+    // A requested capture starts after the menu delay
+    int request = -1;
+
+    if (_captureRequest.load() >= 0 && nowNs >= _captureStartNs.load())
+        request = _captureRequest.exchange(-1);
+
+    if (request >= 0 && request < ProbeCaptureLabelCount)
     {
         if (_captureActive)
             FinishProbeCapture();
@@ -481,15 +488,14 @@ void FSRDFeatureDx12::ProbeInputs(ID3D12GraphicsCommandList* cmdList, ID3D12Reso
 
         _captureActive = true;
         _probeFrame = 0;
-        const auto duration = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-            std::chrono::duration<float>(ProbeCaptureSeconds));
-        _captureEndNs.store((now + duration).time_since_epoch().count());
+        _captureDoneUntilNs.store(0);
+        _captureEndNs.store(nowNs + SecondsToNs(ProbeCaptureSeconds));
 
         LOG_INFO("=== Probe capture #{} '{}' start ({} s) ===", _captureId.load(), ProbeCaptureLabels[_captureLabel],
                  ProbeCaptureSeconds);
     }
 
-    if (_captureActive && now.time_since_epoch().count() >= _captureEndNs.load())
+    if (_captureActive && nowNs >= _captureEndNs.load())
         FinishProbeCapture();
 
     const uint32_t interval = _captureActive ? ProbeCaptureInterval : ProbeInterval;

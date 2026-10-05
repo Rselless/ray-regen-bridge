@@ -154,6 +154,7 @@ class MenuCommon
     static void RenderNotifications(RenderMenuContext& ctx);
     static void UpdateFrameTimeAverages(RenderMenuContext& ctx);
     static void RenderPerformanceOverlay(RenderMenuContext& ctx);
+    static void RenderProbeCaptureOverlay(RenderMenuContext& ctx);
     static void RenderMainMenuWindow(RenderMenuContext& ctx);
 
     // RenderMainMenuWindow section helpers. These keep the main window flow readable

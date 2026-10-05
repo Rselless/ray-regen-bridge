@@ -1610,6 +1610,67 @@ void MenuCommon::UpdateVersionAndStartupNotifications(RenderMenuContext& ctx)
     }
 }
 
+// FSRD diagnostic capture currently shown on screen, if any
+static FSRDFeatureDx12* ProbeCaptureFeature()
+{
+    auto fsrd = dynamic_cast<FSRDFeatureDx12*>(State::Instance().currentFeature);
+
+    if (fsrd == nullptr)
+        return nullptr;
+
+    if (fsrd->ProbeCapturePending() || fsrd->ProbeCaptureRemaining() > 0.0f || fsrd->ProbeCaptureJustDone())
+        return fsrd;
+
+    return nullptr;
+}
+
+static bool ProbeCaptureOverlayNeeded() { return ProbeCaptureFeature() != nullptr; }
+
+void MenuCommon::RenderProbeCaptureOverlay(RenderMenuContext& ctx)
+{
+    if (!ctx.newFrame)
+        return;
+
+    auto fsrd = ProbeCaptureFeature();
+
+    if (fsrd == nullptr)
+        return;
+
+    const float scale = std::max(ctx.menuResScale, 1.0f);
+
+    ImGui::SetNextWindowPos(ImVec2(ctx.io.DisplaySize.x * 0.5f, 12.0f * scale), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.75f);
+
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                                   ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoFocusOnAppearing |
+                                   ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoSavedSettings;
+
+    if (ImGui::Begin("##FsrdProbeCaptureOverlay", nullptr, flags))
+    {
+        ImGui::SetWindowFontScale(1.5f);
+
+        if (fsrd->ProbeCapturePending())
+        {
+            ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)), "FSRD capture '%s' starts in %.1f s",
+                               fsrd->ProbeCaptureLabel(), fsrd->ProbeCaptureCountdown());
+        }
+        else if (const float remaining = fsrd->ProbeCaptureRemaining(); remaining > 0.0f)
+        {
+            ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.25f, 0.25f, 1.f)), "REC");
+            ImGui::SameLine();
+            ImGui::TextColored(toneMapColor(ImVec4(0.3f, 0.8f, 1.f, 1.f)), "FSRD capture #%d '%s': %.1f s",
+                               fsrd->ProbeCaptureCount(), fsrd->ProbeCaptureLabel(), remaining);
+        }
+        else
+        {
+            ImGui::TextColored(toneMapColor(ImVec4(0.f, 1.f, 0.25f, 1.f)), "FSRD capture #%d '%s' done",
+                               fsrd->ProbeCaptureCount(), fsrd->ProbeCaptureLabel());
+        }
+    }
+
+    ImGui::End();
+}
+
 void MenuCommon::BeginMenuFrameIfNeeded(RenderMenuContext& ctx)
 {
     auto& state = ctx.state;
@@ -1620,7 +1681,8 @@ void MenuCommon::BeginMenuFrameIfNeeded(RenderMenuContext& ctx)
 
     // New frame check
     if ((!config->DisableSplash.value_or_default() && now > splashStart && now < splashLimit) ||
-        config->ShowFps.value_or_default() || _isVisible || ImGui::notifications.size() > 0)
+        config->ShowFps.value_or_default() || _isVisible || ImGui::notifications.size() > 0 ||
+        ProbeCaptureOverlayNeeded())
     {
         if (!_isUWP)
         {
@@ -2700,7 +2762,12 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
 
                 const float remaining = fsrd->ProbeCaptureRemaining();
 
-                if (remaining > 0.0f)
+                if (fsrd->ProbeCapturePending())
+                {
+                    ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)), "Starts in %.1f s, close the menu",
+                                       fsrd->ProbeCaptureCountdown());
+                }
+                else if (remaining > 0.0f)
                 {
                     ImGui::TextColored(toneMapColor(ImVec4(0.3f, 0.8f, 1.f, 1.f)), "Capturing #%d: %.1f s",
                                        fsrd->ProbeCaptureCount(), remaining);
@@ -2712,7 +2779,7 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
 
                 ShowHelpMarker("Records the denoiser inputs at 5 screen points for 10 s\n"
                                "(~7 samples/s) and writes a summary per point to OptiScaler.log.\n"
-                               "Close the menu right after pressing it so the capture sees gameplay.");
+                               "Starts 2 s after pressing: close the menu, a timer shows on screen.");
             }
 
             ImGui::PushItemWidth(220.0f * menuResScale);
@@ -8096,6 +8163,7 @@ bool MenuCommon::RenderMenu()
     RenderNotifications(ctx);
     UpdateFrameTimeAverages(ctx);
     RenderPerformanceOverlay(ctx);
+    RenderProbeCaptureOverlay(ctx);
 
     // 4) Draw the full settings menu last so popups and child windows keep their existing behavior.
     RenderMainMenuWindow(ctx);
