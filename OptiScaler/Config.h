@@ -301,7 +301,10 @@ class Config
     CustomOptional<int> FsrdSplitMode { 2 }; // 0 albedo ratio, 1 all specular, 2 roughness weighted
     CustomOptional<float> FsrdReflectionReactive { 0.7f }; // reactive mask strength on smooth reflections
     CustomOptional<float> FsrdSpecHitDistanceScale { 1.0f }; // multiplier for the game's specular hit distance
-    CustomOptional<int> FsrdSentinelMode { 0 };               // texels without G-buffer: 0 passthrough, 1 diffuse
+    CustomOptional<int> FsrdSentinelMode { 0 };
+    // Low frequency restore of what the denoiser removed (fog, haze), 0 = off
+    CustomOptional<float> FsrdLowFreqRestore { 0.0f };
+    CustomOptional<float> FsrdLowFreqRadius { 24.0f };               // texels without G-buffer: 0 passthrough, 1 diffuse
     // Diagnostic, menu only: replace the game's roughness with a constant
     CustomOptional<bool> FsrdRoughnessOverrideEnabled { false };
     // Diagnostic, menu only: skip the denoiser and upscale the game's color, for A/B in the same frame

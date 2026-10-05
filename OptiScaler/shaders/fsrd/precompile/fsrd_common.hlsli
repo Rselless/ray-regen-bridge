@@ -41,7 +41,9 @@ cbuffer Params : register(b0)
     uint SentinelMode;        // SENTINEL_PASSTHROUGH or SENTINEL_DIFFUSE
 
     uint CounterSlot;         // prepass: SentinelCounter texel counted this frame, the other one is cleared
-    float3 Pad3;
+    float RestoreStrength;    // restore: share of the blurred residual (game - composed) added back, 0 = off
+    float RestoreStride;      // restore: pixels between blur taps
+    float Pad3;
 };
 
 #define SENTINEL_PASSTHROUGH 0

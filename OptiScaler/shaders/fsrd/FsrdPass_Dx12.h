@@ -43,7 +43,9 @@ class FsrdPass_Dx12 : public Shader_Dx12
         uint32_t SentinelMode;
 
         uint32_t CounterSlot;
-        float Pad3[3];
+        float RestoreStrength;
+        float RestoreStride;
+        float Pad3;
     };
 
   private:

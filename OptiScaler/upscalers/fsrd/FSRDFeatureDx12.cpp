@@ -7,6 +7,7 @@
 
 #include <shaders/fsrd/precompile/fsrd_prepass_Shader.h>
 #include <shaders/fsrd/precompile/fsrd_compose_Shader.h>
+#include <shaders/fsrd/precompile/fsrd_restore_Shader.h>
 
 // FSR Ray Regeneration API (ffx_denoiser.h 1.2.0), wrapped so it builds on the same ffx_api.h OptiScaler already
 // uses -- see ffx_denoiser_compat.h for why the real header can't be included directly. ffxApiGetResourceDX12 comes
@@ -346,6 +347,7 @@ void FSRDFeatureDx12::ReleaseScratchResources()
     SAFE_RELEASE(_sentinelCounter);
     SAFE_RELEASE(_composedColor);
     SAFE_RELEASE(_reactiveMask);
+    SAFE_RELEASE(_restoredColor);
     SAFE_RELEASE(_probeReadback);
 }
 
@@ -354,7 +356,7 @@ bool FSRDFeatureDx12::PrepareComposedColor(ID3D12Resource* color)
     // Same size as the game's color on purpose: FSR 4's auto exposure reads the whole texture, not just renderSize
     auto colorDesc = color->GetDesc();
 
-    if (_composedColor != nullptr && _reactiveMask != nullptr)
+    if (_composedColor != nullptr && _reactiveMask != nullptr && _restoredColor != nullptr)
     {
         auto desc = _composedColor->GetDesc();
 
@@ -363,7 +365,7 @@ bool FSRDFeatureDx12::PrepareComposedColor(ID3D12Resource* color)
     }
 
     // Can still be in flight from the previous frame, release them later like Util::DelayedDestroy does
-    for (auto* resource : { &_composedColor, &_reactiveMask })
+    for (auto* resource : { &_composedColor, &_reactiveMask, &_restoredColor })
     {
         if (*resource == nullptr)
             continue;
@@ -384,7 +386,9 @@ bool FSRDFeatureDx12::PrepareComposedColor(ID3D12Resource* color)
     return CreateScratchTexture(Device, (UINT) colorDesc.Width, colorDesc.Height, colorDesc.Format, read,
                                 L"FSRD_ComposedColor", &_composedColor) &&
            CreateScratchTexture(Device, (UINT) colorDesc.Width, colorDesc.Height, DXGI_FORMAT_R8_UNORM, read,
-                                L"FSRD_ReactiveMask", &_reactiveMask);
+                                L"FSRD_ReactiveMask", &_reactiveMask) &&
+           CreateScratchTexture(Device, (UINT) colorDesc.Width, colorDesc.Height, colorDesc.Format, read,
+                                L"FSRD_RestoredColor", &_restoredColor);
 }
 
 void FSRDFeatureDx12::DisableDenoiserOnFailure(const char* reason)
@@ -854,13 +858,16 @@ bool FSRDFeatureDx12::InitInternal(ID3D12GraphicsCommandList* InCommandList, NVS
 
     _prepass = std::make_unique<FsrdPass_Dx12>("FSRD Prepass", Device, 8, 6, fsrd_prepass_cso, sizeof(fsrd_prepass_cso));
     _compose = std::make_unique<FsrdPass_Dx12>("FSRD Compose", Device, 9, 2, fsrd_compose_cso, sizeof(fsrd_compose_cso));
+    _restore = std::make_unique<FsrdPass_Dx12>("FSRD Restore", Device, 3, 1, fsrd_restore_cso, sizeof(fsrd_restore_cso));
 
-    if (!_prepass->CanRender() || !_compose->CanRender() || !CreateScratchResources() || !CreateDenoiserContext())
+    if (!_prepass->CanRender() || !_compose->CanRender() || !_restore->CanRender() || !CreateScratchResources() ||
+        !CreateDenoiserContext())
     {
         LOG_ERROR("FSR Ray Regeneration init failed, only upscaling");
         ReleaseScratchResources();
         _prepass.reset();
         _compose.reset();
+        _restore.reset();
         _denoiserDisabled = true;
     }
 
@@ -967,6 +974,9 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
     constants.SentinelMode = (uint32_t) sentinelMode;
     _probeCounterSlot = _sentinelFrame++ % 2;
     constants.CounterSlot = _probeCounterSlot;
+    constants.RestoreStrength = std::clamp(Config::Instance()->FsrdLowFreqRestore.value_or_default(), 0.0f, 1.0f);
+    // 4 taps each side, so the stride is a quarter of the radius
+    constants.RestoreStride = std::max(Config::Instance()->FsrdLowFreqRadius.value_or_default() / 4.0f, 1.0f);
 
     constants.RoughnessOverride = Config::Instance()->FsrdRoughnessOverrideEnabled.value_or_default()
                                       ? std::clamp(Config::Instance()->FsrdRoughnessOverride.value_or_default(), 0.0f, 1.0f)
@@ -1150,7 +1160,19 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
     ProbeInputs(InCommandList, specularHitDistance, normals, diffuseAlbedo, specularAlbedo, viewRows, renderWidth,
                 renderHeight);
 
-    return _composedColor;
+    if (constants.RestoreStrength <= 0.0f)
+        return _composedColor;
+
+    // 4. Restore the low frequency part the denoiser removed (fog, haze)
+    ResourceBarrier(InCommandList, _restoredColor, read, write);
+
+    const bool restoreOk = _restore->Dispatch(InCommandList, { color, _composedColor, _linearDepth },
+                                              { _restoredColor }, constants, (UINT) composedDesc.Width,
+                                              composedDesc.Height);
+
+    ResourceBarrier(InCommandList, _restoredColor, write, read);
+
+    return restoreOk ? _restoredColor : _composedColor;
 }
 
 bool FSRDFeatureDx12::EvaluateInternal(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters)

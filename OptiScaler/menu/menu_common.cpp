@@ -2826,6 +2826,20 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
             ShowHelpMarker("Multiplier for the game's specular ray hit distance\n"
                            "Used to reproject reflections, a wrong scale causes ghosting and noisy mirrors");
 
+            float lowFreqRestore = config->FsrdLowFreqRestore.value_or_default();
+            if (ImGui::SliderFloat("Low-Freq Restore", &lowFreqRestore, 0.0f, 1.0f, "%.2f"))
+                config->FsrdLowFreqRestore = lowFreqRestore;
+
+            ShowHelpMarker("Puts back fog and haze the denoiser removes\n"
+                           "(blurred difference between the game's color and the denoised one)\n"
+                           "0 = off, 1 = full");
+
+            float lowFreqRadius = config->FsrdLowFreqRadius.value_or_default();
+            if (ImGui::SliderFloat("Low-Freq Radius", &lowFreqRadius, 4.0f, 96.0f, "%.0f px"))
+                config->FsrdLowFreqRadius = lowFreqRadius;
+
+            ShowHelpMarker("Blur radius of the restore, larger is smoother but can bring back noise blotches");
+
             const char* sentinelModes[] = { "Passthrough", "Denoise as diffuse" };
             int sentinelMode = std::clamp(config->FsrdSentinelMode.value_or_default(), 0, 1);
 
