@@ -56,6 +56,7 @@ cbuffer Params : register(b0)
 #define FLAG_SEPARATE_ROUGHNESS 0x1
 #define FLAG_HAS_SPEC_HIT_DISTANCE 0x2
 #define FLAG_DEPTH_INVERTED 0x4
+#define FLAG_PARTICLE_LAYER 0x8 // prepass got the color before particles, compose adds the particles back
 
 static const float3 LumaWeights = float3(0.2126f, 0.7152f, 0.0722f);
 static const float MinAlbedo = 0.02f;     // per channel, keeps the demodulated signal bounded

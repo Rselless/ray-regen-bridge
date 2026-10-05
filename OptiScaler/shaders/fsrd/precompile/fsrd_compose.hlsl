@@ -17,6 +17,7 @@ Texture2D<float4> SpecularDenoised : register(t5);
 Texture2D<float> GameReactive : register(t6);    // DLSS.Input.Bias.Current.Color.Mask, null reads 0
 Texture2D<float4> PackedNormals : register(t7);  // prepass output, roughness in B
 Texture2D<float4> GameNormals : register(t8);    // game's GBuffer.Normals, only for the sentinel test
+Texture2D<float4> ColorBeforeParticles : register(t9); // DLSSD.ColorBeforeParticles, used with FLAG_PARTICLE_LAYER
 
 RWTexture2D<float4> Output : register(u0);
 RWTexture2D<float> Reactive : register(u1);
@@ -68,6 +69,16 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
 
     float3 specular = max(SpecularDenoised.Load(p).rgb * sMod, 0.0f);
     float3 composed = max(DiffuseDenoised.Load(p).rgb * dMod, 0.0f) + specular;
+
+    // Particles (steam, smoke, sparks) skip the denoiser: their layer is the game's color minus the color before
+    // particles, added on top of the denoised surfaces like DLSS-RR does
+    if (Flags & FLAG_PARTICLE_LAYER)
+    {
+        const float3 particles = color.rgb - ColorBeforeParticles.Load(p).rgb;
+
+        if (IsFinite3(particles))
+            composed = max(composed + particles, 0.0f);
+    }
 
     if (!IsFinite3(composed))
     {

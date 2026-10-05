@@ -29,12 +29,14 @@ constexpr const char* ViewToClipMatrix = "ViewToClipMatrix";   // float[16]
 constexpr const char* RoughnessMode = "DLSS.Roughness.Mode";   // 0 = separate texture, 1 = normals.w
 constexpr const char* UseHWDepth = "DLSS.Use.HW.Depth";        // 0 = linear, 1 = HW depth
 constexpr const char* DenoiseMode = "DLSS.Denoise.Mode";
+constexpr const char* ColorBeforeParticles = "DLSSD.ColorBeforeParticles";
 } // namespace DlssdKeys
 
 // Must match the defines in fsrd_common.hlsli
 constexpr uint32_t FlagSeparateRoughness = 0x1;
 constexpr uint32_t FlagHasSpecHitDistance = 0x2;
 constexpr uint32_t FlagDepthInverted = 0x4;
+constexpr uint32_t FlagParticleLayer = 0x8;
 
 // Scratch format for the denoiser signals and the packed normals (FFX's preferred signal format)
 constexpr DXGI_FORMAT ScratchFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
@@ -857,7 +859,7 @@ bool FSRDFeatureDx12::InitInternal(ID3D12GraphicsCommandList* InCommandList, NVS
     _maxRenderHeight = std::max(RenderHeight(), DisplayHeight());
 
     _prepass = std::make_unique<FsrdPass_Dx12>("FSRD Prepass", Device, 8, 6, fsrd_prepass_cso, sizeof(fsrd_prepass_cso));
-    _compose = std::make_unique<FsrdPass_Dx12>("FSRD Compose", Device, 9, 2, fsrd_compose_cso, sizeof(fsrd_compose_cso));
+    _compose = std::make_unique<FsrdPass_Dx12>("FSRD Compose", Device, 10, 2, fsrd_compose_cso, sizeof(fsrd_compose_cso));
     _restore = std::make_unique<FsrdPass_Dx12>("FSRD Restore", Device, 3, 1, fsrd_restore_cso, sizeof(fsrd_restore_cso));
 
     if (!_prepass->CanRender() || !_compose->CanRender() || !_restore->CanRender() || !CreateScratchResources() ||
@@ -883,6 +885,29 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
     auto roughness = GetResource(InParameters, DlssdKeys::Roughness);
     auto diffuseAlbedo = GetResource(InParameters, DlssdKeys::DiffuseAlbedo);
     auto specularAlbedo = GetResource(InParameters, DlssdKeys::SpecularAlbedo);
+    ID3D12Resource* beforeParticles = nullptr;
+
+    if (Config::Instance()->FsrdParticleLayer.value_or_default() && color != nullptr)
+    {
+        beforeParticles = GetResource(InParameters, DlssdKeys::ColorBeforeParticles);
+
+        if (beforeParticles != nullptr)
+        {
+            auto colorDesc = color->GetDesc();
+            auto particlesDesc = beforeParticles->GetDesc();
+
+            if (particlesDesc.Width < colorDesc.Width || particlesDesc.Height < colorDesc.Height)
+                beforeParticles = nullptr;
+        }
+    }
+
+    // The denoiser history holds the other color, start over when it changes
+    if ((beforeParticles != nullptr ? 1 : 0) != _lastParticleLayer)
+    {
+        LOG_INFO("Particle layer: {}", beforeParticles != nullptr ? "denoising color before particles" : "off");
+        _lastParticleLayer = beforeParticles != nullptr ? 1 : 0;
+        _resetDenoiserHistory = true;
+    }
     auto specularHitDistance = GetResource(InParameters, DlssdKeys::SpecularHitDistance);
 
     if (color == nullptr || motionVectors == nullptr || depth == nullptr || normals == nullptr ||
@@ -1000,7 +1025,8 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
     constants.DiffuseHitDistance = Config::Instance()->FsrdDiffuseHitDistance.value_or_default();
     constants.Flags = (separateRoughness ? FlagSeparateRoughness : 0) |
                       (specularHitDistance != nullptr ? FlagHasSpecHitDistance : 0) |
-                      (DepthInverted() ? FlagDepthInverted : 0);
+                      (DepthInverted() ? FlagDepthInverted : 0) |
+                      (beforeParticles != nullptr ? FlagParticleLayer : 0);
     constants.RenderWidth = renderWidth;
     constants.RenderHeight = renderHeight;
     constants.SkyDepth = SkyDepth;
@@ -1017,7 +1043,8 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
 
     const bool prepassOk = _prepass->Dispatch(
         InCommandList,
-        { color, diffuseAlbedo, specularAlbedo, normals, separateRoughness ? roughness : nullptr, depth,
+        { beforeParticles != nullptr ? beforeParticles : color, diffuseAlbedo, specularAlbedo, normals,
+          separateRoughness ? roughness : nullptr, depth,
           specularHitDistance, motionVectors },
         { _diffuseIn, _specularIn, _linearDepth, _packedNormals, _motionVectors, _sentinelCounter }, constants,
         renderWidth, renderHeight);
@@ -1143,7 +1170,7 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
     const bool composeOk = _compose->Dispatch(
         InCommandList,
         { color, diffuseAlbedo, specularAlbedo, depth, _diffuseOut, _specularOut, gameReactive, _packedNormals,
-          normals },
+          normals, beforeParticles },
         { _composedColor, _reactiveMask }, constants, (UINT) composedDesc.Width, composedDesc.Height);
 
     ResourceBarrier(InCommandList, _diffuseOut, read, write);

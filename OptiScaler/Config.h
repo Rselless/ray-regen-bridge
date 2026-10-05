@@ -302,6 +302,8 @@ class Config
     CustomOptional<float> FsrdReflectionReactive { 0.7f }; // reactive mask strength on smooth reflections
     CustomOptional<float> FsrdSpecHitDistanceScale { 1.0f }; // multiplier for the game's specular hit distance
     CustomOptional<int> FsrdSentinelMode { 0 };
+    // Denoise DLSSD.ColorBeforeParticles and add the particle layer back undenoised
+    CustomOptional<bool> FsrdParticleLayer { false };
     // Low frequency restore of what the denoiser removed (fog, haze), 0 = off
     CustomOptional<float> FsrdLowFreqRestore { 0.0f };
     CustomOptional<float> FsrdLowFreqRadius { 24.0f };               // texels without G-buffer: 0 passthrough, 1 diffuse
