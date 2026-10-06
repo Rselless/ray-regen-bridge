@@ -23,6 +23,9 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
 {
   private:
     ffxContext _denoiserContext = nullptr;
+    // Context replaced by a debug view switch, destroyed a few frames later when the GPU is done with it
+    ffxContext _retiredContext = nullptr;
+    uint32_t _retiredFrames = 0;
     bool _denoiserContextCreated = false;
     bool _denoiserDisabled = false; // set by config or after repeated failures
     int _denoiserFailures = 0;
@@ -74,6 +77,7 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
 
     bool CreateDenoiserContext();
     void DestroyDenoiserContext();
+    void UpdateDebugView();
     bool CreateScratchResources();
     void ReleaseScratchResources();
     bool PrepareComposedColor(ID3D12Resource* color);

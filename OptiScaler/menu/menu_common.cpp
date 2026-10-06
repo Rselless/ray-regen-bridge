@@ -2873,9 +2873,7 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
             if (ImGui::Checkbox("Debug View", &debugView))
                 config->FsrdDebugView = debugView;
 
-            ShowHelpMarker("FSR Ray Regeneration's debug panels (input signals and denoised output)\n"
-                           "Applies when the feature is recreated: turn Ray Reconstruction\n"
-                           "off and on again in the game's graphics settings");
+            ShowHelpMarker("FSR Ray Regeneration's debug panels (input signals and denoised output)");
 
             bool roughnessOverride = config->FsrdRoughnessOverrideEnabled.value_or_default();
             if (ImGui::Checkbox("Override Roughness", &roughnessOverride))

@@ -310,12 +310,52 @@ bool FSRDFeatureDx12::CreateDenoiserContext()
 
 void FSRDFeatureDx12::DestroyDenoiserContext()
 {
+    if (_retiredContext != nullptr)
+    {
+        FfxApiProxy::D3D12_DestroyContext(&_retiredContext, nullptr);
+        _retiredContext = nullptr;
+    }
+
     if (!_denoiserContextCreated)
         return;
 
     FfxApiProxy::D3D12_DestroyContext(&_denoiserContext, nullptr);
     _denoiserContext = nullptr;
     _denoiserContextCreated = false;
+}
+
+void FSRDFeatureDx12::UpdateDebugView()
+{
+    // Frames the GPU can still be using the replaced context
+    constexpr uint32_t RetireFrames = 8;
+
+    if (_retiredContext != nullptr && ++_retiredFrames > RetireFrames)
+    {
+        FfxApiProxy::D3D12_DestroyContext(&_retiredContext, nullptr);
+        _retiredContext = nullptr;
+    }
+
+    // The debug view needs a context created with FFX_DENOISER_ENABLE_DEBUGGING, so switching it from the menu
+    // creates a new context; the old one is kept until the GPU is done with it
+    const bool debugView = Config::Instance()->FsrdDebugView.value_or_default();
+
+    if (debugView == _debugView || !_denoiserContextCreated || _denoiserDisabled || _retiredContext != nullptr)
+        return;
+
+    _retiredContext = _denoiserContext;
+    _retiredFrames = 0;
+    _denoiserContext = nullptr;
+    _denoiserContextCreated = false;
+    _debugView = debugView;
+
+    for (auto& sent : _tuningSent)
+        sent = false;
+
+    if (!CreateDenoiserContext())
+    {
+        _denoiserFailures = MaxDenoiserFailures;
+        DisableDenoiserOnFailure("Can't recreate the denoiser context for the debug view");
+    }
 }
 
 bool FSRDFeatureDx12::CreateScratchResources()
@@ -1237,10 +1277,12 @@ bool FSRDFeatureDx12::EvaluateInternal(ID3D12GraphicsCommandList* InCommandList,
         {
             composed = rawParticles;
             rawView = true;
-            _lastParticleLayer = 3;
+            _lastParticleLayer = 2;
             _resetDenoiserHistory = true;
         }
     }
+
+    UpdateDebugView();
 
     if (composed == nullptr && !bypass && !_denoiserDisabled && _denoiserContextCreated)
         composed = Denoise(InCommandList, InParameters);
