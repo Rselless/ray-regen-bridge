@@ -88,7 +88,8 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
 
     float viewZ = LinearDepth(hwDepth);
 
-    PackedNormals[DTid.xy] = float4(NormalToOctahedronUv(normal), saturate(roughness), 0.0f);
+    const float material = (sentinel && SentinelMode == SENTINEL_DIFFUSE) ? MATERIAL_SENTINEL : MATERIAL_SURFACE;
+    PackedNormals[DTid.xy] = float4(NormalToOctahedronUv(normal), saturate(roughness), material);
     LinearDepthOut[DTid.xy] = viewZ;
     MotionVectorsOut[DTid.xy] = BuildMotionVector(DTid.xy, viewZ, IsSky(hwDepth) || viewZ >= SkyDepth);
 
@@ -115,12 +116,25 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
 
     color = max(color, 0.0f);
 
-    float specHit = (Flags & FLAG_HAS_SPEC_HIT_DISTANCE) ? SpecularHitDistance.Load(p) * SpecHitScale
-                                                         : DiffuseHitDistance;
-    specHit = (specHit > 0.0f && !isnan(specHit)) ? min(specHit, 65504.0f) : 65504.0f;
+    // Game's specular hit distance: NoHitDistance = ray missed (far), 0 or invalid = no specular ray, the specular
+    // signal is inactive and the whole color goes through the diffuse one
+    float specHit = DiffuseHitDistance;
+    bool specActive = true;
 
-    float wd = DiffuseWeight(albedoRatio, saturate(roughness));
+    if (Flags & FLAG_HAS_SPEC_HIT_DISTANCE)
+    {
+        const float rawHit = SpecularHitDistance.Load(p);
+
+        if (rawHit >= NoHitDistance)
+            specHit = MaxHitDistance;
+        else if (rawHit > 0.0f)
+            specHit = min(rawHit * SpecHitScale, MaxHitDistance);
+        else
+            specActive = false;
+    }
+
+    const float wd = specActive ? DiffuseWeight(albedoRatio, saturate(roughness)) : 1.0f;
 
     DiffuseSignal[DTid.xy] = float4(color * wd / dMod, DiffuseHitDistance);
-    SpecularSignal[DTid.xy] = float4(color * (1.0f - wd) / sMod, specHit);
+    SpecularSignal[DTid.xy] = specActive ? float4(color * (1.0f - wd) / sMod, specHit) : float4(0.0f, 0.0f, 0.0f, -1.0f);
 }

@@ -29,14 +29,11 @@ float3 OverParticles(float3 c, int3 p, inout float reactive)
     if ((Flags & FLAG_PARTICLE_LAYER) == 0)
         return c;
 
-    const float4 layer = Particles.Load(p);
+    const float3 over = OverParticleLayer(c, Particles.Load(p), reactive);
 
-    if (!IsFinite3(layer.rgb) || isnan(layer.a))
-        return c;
-
-    const float coverage = saturate(layer.a);
-    reactive = max(reactive, coverage);
-    return max(c * (1.0f - coverage) + layer.rgb, 0.0f);
+    // With the low frequency restore on, its residual (game color - composed) must not see the particles, which
+    // the game color doesn't have; the restore pass puts them over afterwards
+    return (Flags & FLAG_PARTICLE_DEFERRED) ? c : over;
 }
 
 [numthreads(16, 16, 1)]

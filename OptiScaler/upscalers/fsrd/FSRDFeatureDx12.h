@@ -78,6 +78,8 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     bool CreateDenoiserContext();
     void DestroyDenoiserContext();
     void UpdateDebugView();
+    ID3D12Resource* GetParticleLayer(NVSDK_NGX_Parameter* InParameters, ID3D12Resource* color);
+    ID3D12Resource* BypassWithParticles(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters);
     bool CreateScratchResources();
     void ReleaseScratchResources();
     bool PrepareComposedColor(ID3D12Resource* color);

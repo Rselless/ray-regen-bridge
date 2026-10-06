@@ -301,13 +301,15 @@ class Config
     CustomOptional<int> FsrdSplitMode { 2 }; // 0 albedo ratio, 1 all specular, 2 roughness weighted
     CustomOptional<float> FsrdReflectionReactive { 0.7f }; // reactive mask strength on smooth reflections
     CustomOptional<float> FsrdSpecHitDistanceScale { 1.0f }; // multiplier for the game's specular hit distance
-    CustomOptional<int> FsrdSentinelMode { 0 };
+    CustomOptional<int> FsrdSentinelMode { 0 }; // texels without G-buffer: 0 passthrough, 1 diffuse
     // Steam/smoke layer the game only sends in DLSSD.ColorBeforeParticles: 0 = off, 1 = over the denoised color,
     // 2 = debug, upscale that texture as is
     CustomOptional<int> FsrdParticleLayer { 1 };
     // Low frequency restore of what the denoiser removed (fog, haze), 0 = off
     CustomOptional<float> FsrdLowFreqRestore { 0.0f };
-    CustomOptional<float> FsrdLowFreqRadius { 24.0f };               // texels without G-buffer: 0 passthrough, 1 diffuse
+    CustomOptional<float> FsrdLowFreqRadius { 24.0f };
+    // Periodic probe log of the inputs (hit distance, depth, normals, albedos) outside captures
+    CustomOptional<bool> FsrdDiagnostics { false };
     // Diagnostic, menu only: replace the game's roughness with a constant
     CustomOptional<bool> FsrdRoughnessOverrideEnabled { false };
     // Diagnostic, menu only: skip the denoiser and upscale the game's color, for A/B in the same frame

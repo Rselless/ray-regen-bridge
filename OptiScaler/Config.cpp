@@ -424,6 +424,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             if (auto setting = readFloat("FSRD", "LowFreqRadius"); setting.has_value() && setting.value() >= 4.0f)
                 FsrdLowFreqRadius.set_from_config(setting);
 
+            FsrdDiagnostics.set_from_config(readBool("FSRD", "Diagnostics"));
             FsrdStabilityBias.set_from_config(readFloat("FSRD", "StabilityBias"));
             FsrdRadianceClipStdK.set_from_config(readFloat("FSRD", "RadianceClipStdK"));
             FsrdKernelRelaxation.set_from_config(readFloat("FSRD", "KernelRelaxation"));
@@ -1261,6 +1262,7 @@ bool Config::SaveIni()
         ini.SetValue("FSRD", "LowFreqRestore",
                      GetFloatValue(Instance()->FsrdLowFreqRestore.value_for_config()).c_str());
         ini.SetValue("FSRD", "LowFreqRadius", GetFloatValue(Instance()->FsrdLowFreqRadius.value_for_config()).c_str());
+        ini.SetValue("FSRD", "Diagnostics", GetBoolValue(Instance()->FsrdDiagnostics.value_for_config()).c_str());
         ini.SetValue("FSRD", "StabilityBias",
                      GetFloatValue(Instance()->FsrdStabilityBias.value_for_config()).c_str());
         ini.SetValue("FSRD", "RadianceClipStdK",

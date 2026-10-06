@@ -2876,6 +2876,13 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
             ShowHelpMarker("Diagnostic: shows the signals FSRD gives the denoiser, remodulated,\n"
                            "instead of the denoised result. Noisy by design. Not saved to the ini.");
 
+            bool diagnostics = config->FsrdDiagnostics.value_or_default();
+            if (ImGui::Checkbox("Diagnostics log", &diagnostics))
+                config->FsrdDiagnostics = diagnostics;
+
+            ShowHelpMarker("Logs the inputs at a few screen points every 120 frames.\n"
+                           "Captures from the button above always log.");
+
             bool debugView = config->FsrdDebugView.value_or_default();
             if (ImGui::Checkbox("Debug View", &debugView))
                 config->FsrdDebugView = debugView;

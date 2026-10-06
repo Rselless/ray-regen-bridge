@@ -37,6 +37,7 @@ constexpr uint32_t FlagSeparateRoughness = 0x1;
 constexpr uint32_t FlagHasSpecHitDistance = 0x2;
 constexpr uint32_t FlagDepthInverted = 0x4;
 constexpr uint32_t FlagParticleLayer = 0x8;
+constexpr uint32_t FlagParticleDeferred = 0x10;
 
 // Scratch format for the denoiser signals and the packed normals (FFX's preferred signal format)
 constexpr DXGI_FORMAT ScratchFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
@@ -456,7 +457,7 @@ void FSRDFeatureDx12::ApplyTuning()
         { &config->FsrdMaxRadiance, FFX_API_CONFIGURE_DENOISER_KEY_MAX_RADIANCE },
     };
 
-    for (int i = 0; i < 4; i++)
+    for (size_t i = 0; i < std::size(tunables); i++)
     {
         if (!tunables[i].first->has_value())
             continue;
@@ -562,6 +563,14 @@ void FSRDFeatureDx12::ProbeInputs(ID3D12GraphicsCommandList* cmdList, ID3D12Reso
 
     if (_captureActive && nowNs >= _captureEndNs.load())
         FinishProbeCapture();
+
+    // Outside a capture the periodic probe log only runs with the Diagnostics option
+    if (!_captureActive && !Config::Instance()->FsrdDiagnostics.value_or_default())
+    {
+        _probeSlotWritten[0] = _probeSlotWritten[1] = false;
+        _probeFrame = 0;
+        return;
+    }
 
     const uint32_t interval = _captureActive ? ProbeCaptureInterval : ProbeInterval;
 
@@ -900,7 +909,7 @@ bool FSRDFeatureDx12::InitInternal(ID3D12GraphicsCommandList* InCommandList, NVS
 
     _prepass = std::make_unique<FsrdPass_Dx12>("FSRD Prepass", Device, 8, 6, fsrd_prepass_cso, sizeof(fsrd_prepass_cso));
     _compose = std::make_unique<FsrdPass_Dx12>("FSRD Compose", Device, 10, 2, fsrd_compose_cso, sizeof(fsrd_compose_cso));
-    _restore = std::make_unique<FsrdPass_Dx12>("FSRD Restore", Device, 3, 1, fsrd_restore_cso, sizeof(fsrd_restore_cso));
+    _restore = std::make_unique<FsrdPass_Dx12>("FSRD Restore", Device, 4, 1, fsrd_restore_cso, sizeof(fsrd_restore_cso));
 
     if (!_prepass->CanRender() || !_compose->CanRender() || !_restore->CanRender() || !CreateScratchResources() ||
         !CreateDenoiserContext())
@@ -925,37 +934,7 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
     auto roughness = GetResource(InParameters, DlssdKeys::Roughness);
     auto diffuseAlbedo = GetResource(InParameters, DlssdKeys::DiffuseAlbedo);
     auto specularAlbedo = GetResource(InParameters, DlssdKeys::SpecularAlbedo);
-    ID3D12Resource* beforeParticles = nullptr;
-    int particleMode = Config::Instance()->FsrdParticleLayer.value_or_default() == 1 ? 1 : 0;
-
-    if (particleMode != 0 && color != nullptr)
-    {
-        beforeParticles = GetResource(InParameters, DlssdKeys::ColorBeforeParticles);
-
-        if (beforeParticles != nullptr)
-        {
-            auto colorDesc = color->GetDesc();
-            auto particlesDesc = beforeParticles->GetDesc();
-
-            if (particlesDesc.Width < colorDesc.Width || particlesDesc.Height < colorDesc.Height)
-                beforeParticles = nullptr;
-        }
-    }
-
-    if (beforeParticles == nullptr)
-        particleMode = 0;
-
-    // The denoiser history holds the other color, start over when it changes
-    if (particleMode != _lastParticleLayer)
-    {
-        LOG_INFO("Particle layer: {}", particleMode == 0 ? "off" : "over");
-        _lastParticleLayer = particleMode;
-    }
-
-    // Cyberpunk sends steam/smoke/light glows in DLSSD.ColorBeforeParticles as a separate premultiplied layer over
-    // black, not in the main color; the denoiser gets the main color and compose puts the layer over the result
-    ID3D12Resource* outputColor = color;
-    ID3D12Resource* denoiserColor = color;
+    auto particles = GetParticleLayer(InParameters, color);
     auto specularHitDistance = GetResource(InParameters, DlssdKeys::SpecularHitDistance);
 
     if (color == nullptr || motionVectors == nullptr || depth == nullptr || normals == nullptr ||
@@ -1074,7 +1053,7 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
     constants.Flags = (separateRoughness ? FlagSeparateRoughness : 0) |
                       (specularHitDistance != nullptr ? FlagHasSpecHitDistance : 0) |
                       (DepthInverted() ? FlagDepthInverted : 0) |
-                      (particleMode != 0 ? FlagParticleLayer : 0);
+                      (particles != nullptr ? FlagParticleLayer : 0);
     constants.RenderWidth = renderWidth;
     constants.RenderHeight = renderHeight;
     constants.SkyDepth = SkyDepth;
@@ -1091,7 +1070,7 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
 
     const bool prepassOk = _prepass->Dispatch(
         InCommandList,
-        { denoiserColor, diffuseAlbedo, specularAlbedo, normals,
+        { color, diffuseAlbedo, specularAlbedo, normals,
           separateRoughness ? roughness : nullptr, depth,
           specularHitDistance, motionVectors },
         { _diffuseIn, _specularIn, _linearDepth, _packedNormals, _motionVectors, _sentinelCounter }, constants,
@@ -1220,11 +1199,21 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
     auto diffuseSignal = showInput ? _diffuseIn : _diffuseOut;
     auto specularSignal = showInput ? _specularIn : _specularOut;
 
+    // With the low frequency restore on, its residual (game color - composed) must not see the particles, so
+    // compose only marks them in the reactive mask and the restore pass puts them over
+    const bool restoreOn = constants.RestoreStrength > 0.0f;
+    const uint32_t passFlags = constants.Flags;
+
+    if (restoreOn && particles != nullptr)
+        constants.Flags |= FlagParticleDeferred;
+
     const bool composeOk = _compose->Dispatch(
         InCommandList,
-        { outputColor, diffuseAlbedo, specularAlbedo, depth, diffuseSignal, specularSignal, gameReactive, _packedNormals,
-          normals, particleMode != 0 ? beforeParticles : nullptr },
+        { color, diffuseAlbedo, specularAlbedo, depth, diffuseSignal, specularSignal, gameReactive, _packedNormals,
+          normals, particles },
         { _composedColor, _reactiveMask }, constants, (UINT) composedDesc.Width, composedDesc.Height);
+
+    constants.Flags = passFlags;
 
     ResourceBarrier(InCommandList, _diffuseOut, read, write);
     ResourceBarrier(InCommandList, _specularOut, read, write);
@@ -1240,19 +1229,90 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
     ProbeInputs(InCommandList, specularHitDistance, normals, diffuseAlbedo, specularAlbedo, viewRows, renderWidth,
                 renderHeight);
 
-    if (constants.RestoreStrength <= 0.0f)
+    if (!restoreOn)
         return _composedColor;
 
-    // 4. Restore the low frequency part the denoiser removed (fog, haze)
+    // 4. Restore the low frequency part the denoiser removed (fog, haze), then the particles go over
     ResourceBarrier(InCommandList, _restoredColor, read, write);
 
-    const bool restoreOk = _restore->Dispatch(InCommandList, { outputColor, _composedColor, _linearDepth },
+    const bool restoreOk = _restore->Dispatch(InCommandList, { color, _composedColor, _linearDepth, particles },
                                               { _restoredColor }, constants, (UINT) composedDesc.Width,
                                               composedDesc.Height);
 
     ResourceBarrier(InCommandList, _restoredColor, write, read);
 
     return restoreOk ? _restoredColor : _composedColor;
+}
+
+ID3D12Resource* FSRDFeatureDx12::GetParticleLayer(NVSDK_NGX_Parameter* InParameters, ID3D12Resource* color)
+{
+    // Cyberpunk sends steam/smoke/light glows in DLSSD.ColorBeforeParticles as a separate premultiplied layer over
+    // black (alpha = coverage), not in the main color. The denoiser gets the main color, the layer goes over after.
+    ID3D12Resource* particles = nullptr;
+
+    if (Config::Instance()->FsrdParticleLayer.value_or_default() == 1 && color != nullptr)
+    {
+        particles = GetResource(InParameters, DlssdKeys::ColorBeforeParticles);
+
+        if (particles != nullptr)
+        {
+            auto colorDesc = color->GetDesc();
+            auto particlesDesc = particles->GetDesc();
+
+            if (particlesDesc.Width < colorDesc.Width || particlesDesc.Height < colorDesc.Height)
+                particles = nullptr;
+        }
+    }
+
+    const int mode = particles != nullptr ? 1 : 0;
+
+    if (mode != _lastParticleLayer)
+    {
+        LOG_INFO("Particle layer: {}", mode == 0 ? "off" : "over");
+        _lastParticleLayer = mode;
+    }
+
+    return particles;
+}
+
+ID3D12Resource* FSRDFeatureDx12::BypassWithParticles(ID3D12GraphicsCommandList* InCommandList,
+                                                     NVSDK_NGX_Parameter* InParameters)
+{
+    if (_restore == nullptr || !_restore->CanRender() || _restoredColor == nullptr)
+        return nullptr;
+
+    auto color = GetResource(InParameters, NVSDK_NGX_Parameter_Color);
+    auto particles = GetParticleLayer(InParameters, color);
+
+    if (particles == nullptr)
+        return nullptr;
+
+    unsigned int renderWidth = 0, renderHeight = 0;
+    GetRenderResolution(InParameters, &renderWidth, &renderHeight);
+
+    if (renderWidth == 0 || renderHeight == 0)
+        return nullptr;
+
+    // The restore pass with strength 0 only puts the particle layer over its Composed input
+    FsrdPass_Dx12::Constants constants {};
+    constants.RenderWidth = std::min(renderWidth, _maxRenderWidth);
+    constants.RenderHeight = std::min(renderHeight, _maxRenderHeight);
+    constants.Flags = FlagParticleLayer;
+    constants.RestoreStrength = 0.0f;
+    constants.RestoreStride = 1.0f;
+
+    const auto read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    const auto write = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    auto outDesc = _restoredColor->GetDesc();
+
+    ResourceBarrier(InCommandList, _restoredColor, read, write);
+
+    const bool ok = _restore->Dispatch(InCommandList, { color, color, nullptr, particles }, { _restoredColor },
+                                       constants, (UINT) outDesc.Width, outDesc.Height);
+
+    ResourceBarrier(InCommandList, _restoredColor, write, read);
+
+    return ok ? _restoredColor : nullptr;
 }
 
 bool FSRDFeatureDx12::EvaluateInternal(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters)
@@ -1271,8 +1331,9 @@ bool FSRDFeatureDx12::EvaluateInternal(ID3D12GraphicsCommandList* InCommandList,
         _resetDenoiserHistory = true;
     }
 
-    // Debug: upscale DLSSD.ColorBeforeParticles as is, to see what the game puts in it
-    bool rawView = false;
+    // Debug: upscale DLSSD.ColorBeforeParticles as is, to see what the game puts in it. Here and in bypass the
+    // game's reactive mask is kept, ours isn't written.
+    bool gameReactiveOnly = false;
 
     if (Config::Instance()->FsrdParticleLayer.value_or_default() == 2)
     {
@@ -1281,13 +1342,19 @@ bool FSRDFeatureDx12::EvaluateInternal(ID3D12GraphicsCommandList* InCommandList,
         if (rawParticles != nullptr)
         {
             composed = rawParticles;
-            rawView = true;
-            _lastParticleLayer = 2;
+            gameReactiveOnly = true;
             _resetDenoiserHistory = true;
         }
     }
 
     UpdateDebugView();
+
+    // Bypass: the game's color with the particle layer over it, so an A/B in steam is fair
+    if (composed == nullptr && bypass)
+    {
+        composed = BypassWithParticles(InCommandList, InParameters);
+        gameReactiveOnly = composed != nullptr;
+    }
 
     if (composed == nullptr && !bypass && !_denoiserDisabled && _denoiserContextCreated)
         composed = Denoise(InCommandList, InParameters);
@@ -1302,14 +1369,14 @@ bool FSRDFeatureDx12::EvaluateInternal(ID3D12GraphicsCommandList* InCommandList,
 
     InParameters->Set(NVSDK_NGX_Parameter_Color, composed);
 
-    if (!_debugView && !rawView)
+    if (!_debugView && !gameReactiveOnly)
         InParameters->Set("FSR.reactive", _reactiveMask);
 
     auto result = FFXFeatureDx12::EvaluateInternal(InCommandList, InParameters);
 
     InParameters->Set(NVSDK_NGX_Parameter_Color, gameColor);
 
-    if (!_debugView && !rawView)
+    if (!_debugView && !gameReactiveOnly)
         InParameters->Set("FSR.reactive", gameFsrReactive);
 
     return result;

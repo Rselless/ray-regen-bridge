@@ -56,7 +56,14 @@ cbuffer Params : register(b0)
 #define FLAG_SEPARATE_ROUGHNESS 0x1
 #define FLAG_HAS_SPEC_HIT_DISTANCE 0x2
 #define FLAG_DEPTH_INVERTED 0x4
-#define FLAG_PARTICLE_LAYER 0x8 // compose puts the particle layer (premultiplied, alpha = coverage) over the result
+#define FLAG_PARTICLE_LAYER 0x8     // particle layer (premultiplied, alpha = coverage) goes over the result
+#define FLAG_PARTICLE_DEFERRED 0x10 // compose: reactive mask only, the restore pass puts the particles over
+
+#define MATERIAL_SURFACE 0.0f  // packed normals alpha: material type the denoiser doesn't filter across
+#define MATERIAL_SENTINEL 1.0f // sentinel texels denoised as diffuse, kept apart from real surfaces
+
+static const float NoHitDistance = 10000.0f; // game's specular hit distance when the ray missed (ReSTIR DI)
+static const float MaxHitDistance = 65504.0f;
 
 static const float3 LumaWeights = float3(0.2126f, 0.7152f, 0.0722f);
 static const float MinAlbedo = 0.02f;     // per channel, keeps the demodulated signal bounded
@@ -134,4 +141,16 @@ float2 NormalToOctahedronUv(float3 N)
 bool IsFinite3(float3 v)
 {
     return all(!isnan(v)) && all(!isinf(v));
+}
+
+// Cyberpunk's particle layer (DLSSD.ColorBeforeParticles): steam, smoke and light glows premultiplied over black,
+// alpha = coverage. Puts it over c and raises the reactive mask where it covers.
+float3 OverParticleLayer(float3 c, float4 layer, inout float reactive)
+{
+    if (!IsFinite3(layer.rgb) || isnan(layer.a))
+        return c;
+
+    const float coverage = saturate(layer.a);
+    reactive = max(reactive, coverage);
+    return max(c * (1.0f - coverage) + layer.rgb, 0.0f);
 }
