@@ -1196,6 +1196,12 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
 
     // Diagnostic: remodulate the denoiser's inputs instead of its outputs, to see what it receives
     const bool showInput = Config::Instance()->FsrdShowDenoiserInput.value_or_default();
+
+    if (showInput != _wasShowingInput)
+    {
+        LOG_INFO("Show denoiser input: {}", showInput);
+        _wasShowingInput = showInput;
+    }
     auto diffuseSignal = showInput ? _diffuseIn : _diffuseOut;
     auto specularSignal = showInput ? _specularIn : _specularOut;
 

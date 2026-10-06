@@ -68,6 +68,7 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     int _lastSentinelMode = -1;
     int _lastParticleLayer = -1;
     bool _wasBypassed = false;
+    bool _wasShowingInput = false;
 
     std::unique_ptr<FsrdPass_Dx12> _prepass;
     std::unique_ptr<FsrdPass_Dx12> _compose;
