@@ -37,7 +37,6 @@ constexpr uint32_t FlagSeparateRoughness = 0x1;
 constexpr uint32_t FlagHasSpecHitDistance = 0x2;
 constexpr uint32_t FlagDepthInverted = 0x4;
 constexpr uint32_t FlagParticleLayer = 0x8;
-constexpr uint32_t FlagAlphaCoverage = 0x10;
 
 // Scratch format for the denoiser signals and the packed normals (FFX's preferred signal format)
 constexpr DXGI_FORMAT ScratchFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
@@ -887,7 +886,7 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
     auto diffuseAlbedo = GetResource(InParameters, DlssdKeys::DiffuseAlbedo);
     auto specularAlbedo = GetResource(InParameters, DlssdKeys::SpecularAlbedo);
     ID3D12Resource* beforeParticles = nullptr;
-    int particleMode = std::clamp(Config::Instance()->FsrdParticleLayer.value_or_default(), 0, 2);
+    int particleMode = Config::Instance()->FsrdParticleLayer.value_or_default() == 1 ? 1 : 0;
 
     if (particleMode != 0 && color != nullptr)
     {
@@ -909,9 +908,7 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
     // The denoiser history holds the other color, start over when it changes
     if (particleMode != _lastParticleLayer)
     {
-        LOG_INFO("Particle layer: {}", particleMode == 0   ? "off"
-                                       : particleMode == 1 ? "over, alpha = transmittance"
-                                                           : "over, alpha = coverage");
+        LOG_INFO("Particle layer: {}", particleMode == 0 ? "off" : "over");
         _lastParticleLayer = particleMode;
     }
 
@@ -1037,7 +1034,7 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
     constants.Flags = (separateRoughness ? FlagSeparateRoughness : 0) |
                       (specularHitDistance != nullptr ? FlagHasSpecHitDistance : 0) |
                       (DepthInverted() ? FlagDepthInverted : 0) |
-                      (particleMode != 0 ? FlagParticleLayer : 0) | (particleMode == 2 ? FlagAlphaCoverage : 0);
+                      (particleMode != 0 ? FlagParticleLayer : 0);
     constants.RenderWidth = renderWidth;
     constants.RenderHeight = renderHeight;
     constants.SkyDepth = SkyDepth;
@@ -1232,7 +1229,7 @@ bool FSRDFeatureDx12::EvaluateInternal(ID3D12GraphicsCommandList* InCommandList,
     // Debug: upscale DLSSD.ColorBeforeParticles as is, to see what the game puts in it
     bool rawView = false;
 
-    if (Config::Instance()->FsrdParticleLayer.value_or_default() == 3)
+    if (Config::Instance()->FsrdParticleLayer.value_or_default() == 2)
     {
         auto rawParticles = GetResource(InParameters, DlssdKeys::ColorBeforeParticles);
 

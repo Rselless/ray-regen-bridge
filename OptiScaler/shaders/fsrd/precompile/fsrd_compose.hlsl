@@ -17,8 +17,8 @@ Texture2D<float4> SpecularDenoised : register(t5);
 Texture2D<float> GameReactive : register(t6);    // DLSS.Input.Bias.Current.Color.Mask, null reads 0
 Texture2D<float4> PackedNormals : register(t7);  // prepass output, roughness in B
 Texture2D<float4> GameNormals : register(t8);    // game's GBuffer.Normals, only for the sentinel test
-Texture2D<float4> Particles : register(t9); // DLSSD.ColorBeforeParticles: steam/smoke/glows over black, used with
-                                            // FLAG_PARTICLE_LAYER; alpha is transmittance or coverage (FLAG_ALPHA_COVERAGE)
+Texture2D<float4> Particles : register(t9); // DLSSD.ColorBeforeParticles: steam/smoke/glows over black, alpha is
+                                            // coverage, used with FLAG_PARTICLE_LAYER
 
 RWTexture2D<float4> Output : register(u0);
 RWTexture2D<float> Reactive : register(u1);
@@ -34,7 +34,7 @@ float3 OverParticles(float3 c, int3 p, inout float reactive)
     if (!IsFinite3(layer.rgb) || isnan(layer.a))
         return c;
 
-    const float coverage = saturate((Flags & FLAG_ALPHA_COVERAGE) ? layer.a : 1.0f - layer.a);
+    const float coverage = saturate(layer.a);
     reactive = max(reactive, coverage);
     return max(c * (1.0f - coverage) + layer.rgb, 0.0f);
 }

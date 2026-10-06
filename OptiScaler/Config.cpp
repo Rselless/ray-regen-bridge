@@ -414,7 +414,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             if (auto setting = readInt("FSRD", "SentinelMode"); setting.has_value() && setting >= 0 && setting <= 1)
                 FsrdSentinelMode.set_from_config(setting);
 
-            if (auto setting = readInt("FSRD", "ParticleLayer"); setting.has_value() && setting >= 0 && setting <= 3)
+            if (auto setting = readInt("FSRD", "ParticleLayer"); setting.has_value() && setting >= 0 && setting <= 2)
                 FsrdParticleLayer.set_from_config(setting);
 
             if (auto setting = readFloat("FSRD", "LowFreqRestore");
