@@ -2869,6 +2869,13 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
             ShowHelpMarker("Diagnostic: skip FSR Ray Regeneration and upscale the game's noisy color,\n"
                            "to compare with the denoiser in the same frame. Not saved to the ini.");
 
+            bool showInput = config->FsrdShowDenoiserInput.value_or_default();
+            if (ImGui::Checkbox("Show denoiser input", &showInput))
+                config->FsrdShowDenoiserInput = showInput;
+
+            ShowHelpMarker("Diagnostic: shows the signals FSRD gives the denoiser, remodulated,\n"
+                           "instead of the denoised result. Noisy by design. Not saved to the ini.");
+
             bool debugView = config->FsrdDebugView.value_or_default();
             if (ImGui::Checkbox("Debug View", &debugView))
                 config->FsrdDebugView = debugView;

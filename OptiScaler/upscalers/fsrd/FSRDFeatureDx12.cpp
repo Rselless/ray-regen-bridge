@@ -1215,9 +1215,14 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
 
     auto gameReactive = GetResource(InParameters, NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_Mask);
 
+    // Diagnostic: remodulate the denoiser's inputs instead of its outputs, to see what it receives
+    const bool showInput = Config::Instance()->FsrdShowDenoiserInput.value_or_default();
+    auto diffuseSignal = showInput ? _diffuseIn : _diffuseOut;
+    auto specularSignal = showInput ? _specularIn : _specularOut;
+
     const bool composeOk = _compose->Dispatch(
         InCommandList,
-        { outputColor, diffuseAlbedo, specularAlbedo, depth, _diffuseOut, _specularOut, gameReactive, _packedNormals,
+        { outputColor, diffuseAlbedo, specularAlbedo, depth, diffuseSignal, specularSignal, gameReactive, _packedNormals,
           normals, particleMode != 0 ? beforeParticles : nullptr },
         { _composedColor, _reactiveMask }, constants, (UINT) composedDesc.Width, composedDesc.Height);
 

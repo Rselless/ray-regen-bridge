@@ -312,6 +312,8 @@ class Config
     CustomOptional<bool> FsrdRoughnessOverrideEnabled { false };
     // Diagnostic, menu only: skip the denoiser and upscale the game's color, for A/B in the same frame
     CustomOptional<bool> FsrdBypassDenoiser { false };
+    // Menu only: compose the prepass signals instead of the denoised ones (what the denoiser gets)
+    CustomOptional<bool> FsrdShowDenoiserInput { false };
     CustomOptional<float> FsrdRoughnessOverride { 0.2f };
     // Denoiser tuning, unset means the denoiser's own default (filled in as a volatile value once it's queried)
     CustomOptional<float, NoDefault> FsrdStabilityBias;
