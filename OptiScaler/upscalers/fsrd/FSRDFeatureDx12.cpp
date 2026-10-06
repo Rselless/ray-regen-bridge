@@ -37,6 +37,7 @@ constexpr uint32_t FlagSeparateRoughness = 0x1;
 constexpr uint32_t FlagHasSpecHitDistance = 0x2;
 constexpr uint32_t FlagDepthInverted = 0x4;
 constexpr uint32_t FlagParticleLayer = 0x8;
+constexpr uint32_t FlagAlphaCoverage = 0x10;
 
 // Scratch format for the denoiser signals and the packed normals (FFX's preferred signal format)
 constexpr DXGI_FORMAT ScratchFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
@@ -908,15 +909,16 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
     // The denoiser history holds the other color, start over when it changes
     if (particleMode != _lastParticleLayer)
     {
-        LOG_INFO("Particle layer: {}", particleMode == 0 ? "off" : particleMode == 1 ? "add on top" : "denoised");
+        LOG_INFO("Particle layer: {}", particleMode == 0   ? "off"
+                                       : particleMode == 1 ? "over, alpha = transmittance"
+                                                           : "over, alpha = coverage");
         _lastParticleLayer = particleMode;
-        _resetDenoiserHistory = true;
     }
 
-    // Cyberpunk only has steam/smoke in DLSSD.ColorBeforeParticles, so that's the final reference color; the
-    // denoiser gets it (mode 2) or the main color without them (mode 1, compose adds the difference back)
-    ID3D12Resource* outputColor = particleMode != 0 ? beforeParticles : color;
-    ID3D12Resource* denoiserColor = particleMode == 2 ? beforeParticles : color;
+    // Cyberpunk sends steam/smoke/light glows in DLSSD.ColorBeforeParticles as a separate premultiplied layer over
+    // black, not in the main color; the denoiser gets the main color and compose puts the layer over the result
+    ID3D12Resource* outputColor = color;
+    ID3D12Resource* denoiserColor = color;
     auto specularHitDistance = GetResource(InParameters, DlssdKeys::SpecularHitDistance);
 
     if (color == nullptr || motionVectors == nullptr || depth == nullptr || normals == nullptr ||
@@ -1035,7 +1037,7 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
     constants.Flags = (separateRoughness ? FlagSeparateRoughness : 0) |
                       (specularHitDistance != nullptr ? FlagHasSpecHitDistance : 0) |
                       (DepthInverted() ? FlagDepthInverted : 0) |
-                      (particleMode == 1 ? FlagParticleLayer : 0);
+                      (particleMode != 0 ? FlagParticleLayer : 0) | (particleMode == 2 ? FlagAlphaCoverage : 0);
     constants.RenderWidth = renderWidth;
     constants.RenderHeight = renderHeight;
     constants.SkyDepth = SkyDepth;
@@ -1179,7 +1181,7 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
     const bool composeOk = _compose->Dispatch(
         InCommandList,
         { outputColor, diffuseAlbedo, specularAlbedo, depth, _diffuseOut, _specularOut, gameReactive, _packedNormals,
-          normals, denoiserColor },
+          normals, particleMode != 0 ? beforeParticles : nullptr },
         { _composedColor, _reactiveMask }, constants, (UINT) composedDesc.Width, composedDesc.Height);
 
     ResourceBarrier(InCommandList, _diffuseOut, read, write);

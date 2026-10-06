@@ -2840,7 +2840,8 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
 
             ShowHelpMarker("Blur radius of the restore, larger is smoother but can bring back noise blotches");
 
-            const char* particleModes[] = { "Off", "Add on top", "Denoise with particles", "Show raw texture (debug)" };
+            const char* particleModes[] = { "Off", "Over (alpha = transmittance)", "Over (alpha = coverage)",
+                                            "Show raw texture (debug)" };
             int particleLayer = std::clamp(config->FsrdParticleLayer.value_or_default(), 0, 3);
 
             if (ImGui::Combo("Particles", &particleLayer, particleModes, IM_ARRAYSIZE(particleModes)))
@@ -2848,8 +2849,7 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
 
             ShowHelpMarker("Steam and smoke the game sends in DLSSD.ColorBeforeParticles\n"
                            "Off: not shown\n"
-                           "Add on top: denoise without them, then add them undenoised\n"
-                           "Denoise with particles: the denoiser gets the color with them\n"
+                           "Over: puts that layer over the denoised color (two ways to read its alpha)\n"
                            "Show raw texture: upscales that texture as is, no denoise");
 
             const char* sentinelModes[] = { "Passthrough", "Denoise as diffuse" };

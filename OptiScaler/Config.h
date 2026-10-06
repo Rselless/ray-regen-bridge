@@ -302,8 +302,8 @@ class Config
     CustomOptional<float> FsrdReflectionReactive { 0.7f }; // reactive mask strength on smooth reflections
     CustomOptional<float> FsrdSpecHitDistanceScale { 1.0f }; // multiplier for the game's specular hit distance
     CustomOptional<int> FsrdSentinelMode { 0 };
-    // Steam/smoke the game only sends in DLSSD.ColorBeforeParticles: 0 = off, 1 = add on top, 2 = denoise them,
-    // 3 = debug, upscale that texture as is
+    // Steam/smoke layer the game only sends in DLSSD.ColorBeforeParticles: 0 = off, 1 = over (alpha =
+    // transmittance), 2 = over (alpha = coverage), 3 = debug, upscale that texture as is
     CustomOptional<int> FsrdParticleLayer { 0 };
     // Low frequency restore of what the denoiser removed (fog, haze), 0 = off
     CustomOptional<float> FsrdLowFreqRestore { 0.0f };

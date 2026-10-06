@@ -56,7 +56,8 @@ cbuffer Params : register(b0)
 #define FLAG_SEPARATE_ROUGHNESS 0x1
 #define FLAG_HAS_SPEC_HIT_DISTANCE 0x2
 #define FLAG_DEPTH_INVERTED 0x4
-#define FLAG_PARTICLE_LAYER 0x8 // compose adds the particle layer (Color - DenoiserColor) on top
+#define FLAG_PARTICLE_LAYER 0x8 // compose puts the particle layer (premultiplied, alpha) over the result
+#define FLAG_ALPHA_COVERAGE 0x10 // particle alpha is coverage instead of transmittance
 
 static const float3 LumaWeights = float3(0.2126f, 0.7152f, 0.0722f);
 static const float MinAlbedo = 0.02f;     // per channel, keeps the demodulated signal bounded

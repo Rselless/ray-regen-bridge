@@ -17,10 +17,27 @@ Texture2D<float4> SpecularDenoised : register(t5);
 Texture2D<float> GameReactive : register(t6);    // DLSS.Input.Bias.Current.Color.Mask, null reads 0
 Texture2D<float4> PackedNormals : register(t7);  // prepass output, roughness in B
 Texture2D<float4> GameNormals : register(t8);    // game's GBuffer.Normals, only for the sentinel test
-Texture2D<float4> DenoiserColor : register(t9); // color the prepass split (no particles), used with FLAG_PARTICLE_LAYER
+Texture2D<float4> Particles : register(t9); // DLSSD.ColorBeforeParticles: steam/smoke/glows over black, used with
+                                            // FLAG_PARTICLE_LAYER; alpha is transmittance or coverage (FLAG_ALPHA_COVERAGE)
 
 RWTexture2D<float4> Output : register(u0);
 RWTexture2D<float> Reactive : register(u1);
+
+// Puts the game's particle layer over a color: color * transmittance + particles (premultiplied)
+float3 OverParticles(float3 c, int3 p, inout float reactive)
+{
+    if ((Flags & FLAG_PARTICLE_LAYER) == 0)
+        return c;
+
+    const float4 layer = Particles.Load(p);
+
+    if (!IsFinite3(layer.rgb) || isnan(layer.a))
+        return c;
+
+    const float coverage = saturate((Flags & FLAG_ALPHA_COVERAGE) ? layer.a : 1.0f - layer.a);
+    reactive = max(reactive, coverage);
+    return max(c * (1.0f - coverage) + layer.rgb, 0.0f);
+}
 
 [numthreads(16, 16, 1)]
 void CSMain(uint3 DTid : SV_DispatchThreadID)
@@ -52,7 +69,8 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
         const float3 denoised = DiffuseDenoised.Load(p).rgb;
         const bool diffuse = SentinelMode == SENTINEL_DIFFUSE && IsFinite3(denoised) && IsFinite3(color.rgb);
 
-        Output[DTid.xy] = diffuse ? float4(max(denoised, 0.0f), color.a) : color;
+        const float3 sentinelColor = diffuse ? max(denoised, 0.0f) : color.rgb;
+        Output[DTid.xy] = float4(OverParticles(sentinelColor, p, gameReactive), color.a);
         Reactive[DTid.xy] = gameReactive;
         return;
     }
@@ -62,7 +80,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
 
     if (!GetModulation(diffuseAlbedo, specularAlbedo, Depth.Load(p), dMod, sMod, albedoRatio) || !IsFinite3(color.rgb))
     {
-        Output[DTid.xy] = color;
+        Output[DTid.xy] = float4(OverParticles(color.rgb, p, gameReactive), color.a);
         Reactive[DTid.xy] = gameReactive;
         return;
     }
@@ -70,19 +88,9 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
     float3 specular = max(SpecularDenoised.Load(p).rgb * sMod, 0.0f);
     float3 composed = max(DiffuseDenoised.Load(p).rgb * dMod, 0.0f) + specular;
 
-    // Particles (steam, smoke, sparks) skip the denoiser: their layer is the color with particles minus the color
-    // the denoiser got, added on top of the denoised surfaces
-    if (Flags & FLAG_PARTICLE_LAYER)
-    {
-        const float3 particles = color.rgb - DenoiserColor.Load(p).rgb;
-
-        if (IsFinite3(particles))
-            composed = max(composed + particles, 0.0f);
-    }
-
     if (!IsFinite3(composed))
     {
-        Output[DTid.xy] = color;
+        Output[DTid.xy] = float4(OverParticles(color.rgb, p, gameReactive), color.a);
         Reactive[DTid.xy] = gameReactive;
         return;
     }
@@ -90,6 +98,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
     float specularShare = saturate(dot(specular, LumaWeights) / max(dot(composed, LumaWeights), 1e-4f));
     float smoothness = 1.0f - smoothstep(0.1f, 0.5f, PackedNormals.Load(p).z);
 
-    Output[DTid.xy] = float4(composed, color.a);
-    Reactive[DTid.xy] = max(gameReactive, saturate(ReflectionReactive * specularShare * smoothness));
+    float reactive = max(gameReactive, saturate(ReflectionReactive * specularShare * smoothness));
+    Output[DTid.xy] = float4(OverParticles(composed, p, reactive), color.a);
+    Reactive[DTid.xy] = reactive;
 }
