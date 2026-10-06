@@ -2869,6 +2869,14 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
             ShowHelpMarker("Diagnostic: skip FSR Ray Regeneration and upscale the game's noisy color,\n"
                            "to compare with the denoiser in the same frame. Not saved to the ini.");
 
+            bool debugView = config->FsrdDebugView.value_or_default();
+            if (ImGui::Checkbox("Debug View", &debugView))
+                config->FsrdDebugView = debugView;
+
+            ShowHelpMarker("FSR Ray Regeneration's debug panels (input signals and denoised output)\n"
+                           "Applies when the feature is recreated: turn Ray Reconstruction\n"
+                           "off and on again in the game's graphics settings");
+
             bool roughnessOverride = config->FsrdRoughnessOverrideEnabled.value_or_default();
             if (ImGui::Checkbox("Override Roughness", &roughnessOverride))
                 config->FsrdRoughnessOverrideEnabled = roughnessOverride;
