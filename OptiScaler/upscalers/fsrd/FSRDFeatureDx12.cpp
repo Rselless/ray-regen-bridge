@@ -146,6 +146,8 @@ FSRDFeatureDx12::~FSRDFeatureDx12()
     for (auto resource : ScratchResources())
         Retire(*resource);
 
+    SAFE_RELEASE(_adapter);
+
     std::thread(
         [retired = std::move(_retired), prepass = std::move(_prepass), compose = std::move(_compose),
          particles = std::move(_particlesPass), probe = std::move(_probe)]() mutable
@@ -261,6 +263,26 @@ bool FSRDFeatureDx12::CreateDenoiserContext()
              "validation: {}",
              _maxRenderWidth, _maxRenderHeight, _directSignals ? "direct" : "indirect", _debugView, _validation);
 
+    {
+        FfxApiEffectMemoryUsage usage {};
+        ffxQueryDescDenoiserGetGPUMemoryUsage memoryDesc {};
+        memoryDesc.header.type = FFX_API_QUERY_DESC_TYPE_DENOISER_GPU_MEMORY_USAGE;
+        memoryDesc.device = Device;
+        memoryDesc.maxRenderSize = createDesc.maxRenderSize;
+        memoryDesc.signalFlags = createDesc.signalFlags;
+        memoryDesc.checkerboardSignalFlags = createDesc.checkerboardSignalFlags;
+        memoryDesc.flags = createDesc.flags;
+        memoryDesc.gpuMemoryUsage = &usage;
+
+        if (FfxApiProxy::D3D12_Query(&_denoiserContext, &memoryDesc.header) == FFX_API_RETURN_OK)
+        {
+            LOG_INFO("Denoiser GPU memory: {:.1f} MB total, {:.1f} MB aliasable",
+                     usage.totalUsageInBytes / (1024.0 * 1024.0), usage.aliasableUsageInBytes / (1024.0 * 1024.0));
+        }
+
+        LogVideoMemory("denoiser context created");
+    }
+
     if (_validation)
     {
         // Validation messages come through the global debug callback
@@ -319,6 +341,37 @@ bool FSRDFeatureDx12::CreateDenoiserContext()
     _denoiserContextCreated = true;
     _resetDenoiserHistory = true;
     return true;
+}
+
+void FSRDFeatureDx12::LogVideoMemory(const char* when)
+{
+    // Local video memory in use by the process vs the budget the OS gives it; over budget the game's own memory
+    // manager starts evicting and recreating its heaps
+    if (_adapter == nullptr)
+    {
+        IDXGIFactory4* factory = nullptr;
+
+        {
+            ScopedSkipSpoofingGlobal skipSpoofingGlobal {};
+
+            if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))))
+                return;
+        }
+
+        factory->EnumAdapterByLuid(Device->GetAdapterLuid(), IID_PPV_ARGS(&_adapter));
+        factory->Release();
+
+        if (_adapter == nullptr)
+            return;
+    }
+
+    DXGI_QUERY_VIDEO_MEMORY_INFO info {};
+
+    if (SUCCEEDED(_adapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info)))
+    {
+        LOG_INFO("VRAM ({}): {:.0f} MB used of {:.0f} MB budget ({:.0f}%)", when, info.CurrentUsage / (1024.0 * 1024.0),
+                 info.Budget / (1024.0 * 1024.0), info.Budget > 0 ? 100.0 * info.CurrentUsage / info.Budget : 0.0);
+    }
 }
 
 void FSRDFeatureDx12::ValidationMessage(uint32_t type, const wchar_t* message)
@@ -1110,6 +1163,10 @@ bool FSRDFeatureDx12::EvaluateInternal(ID3D12GraphicsCommandList* InCommandList,
 
     _evalFrame++;
     ReleaseRetired();
+
+    // ~30 s at 60 fps, only with the Diagnostics option
+    if (_evalFrame % 1800 == 0 && Config::Instance()->FsrdDiagnostics.value_or_default())
+        LogVideoMemory("periodic");
 
     ID3D12Resource* composed = nullptr;
 

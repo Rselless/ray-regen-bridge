@@ -92,6 +92,10 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
 
     bool _loggedInputsOnce = false;
 
+    // For the VRAM usage / budget log
+    IDXGIAdapter3* _adapter = nullptr;
+    void LogVideoMemory(const char* when);
+
     // Everything one Denoise() call works with
     struct FrameInputs
     {
