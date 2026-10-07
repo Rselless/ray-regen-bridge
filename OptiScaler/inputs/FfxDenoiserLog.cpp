@@ -6,6 +6,7 @@
 
 #include <magic_enum.hpp>
 
+#include <algorithm>
 #include <mutex>
 #include <set>
 #include <string>
@@ -17,8 +18,10 @@ constexpr uint32_t EffectMask = 0x00ff0000u;
 constexpr uint32_t RadianceCacheEffect = 0x00060000u;
 constexpr size_t MaxConfigureLogs = 64;
 constexpr size_t MaxDispatchShapes = 16;
+constexpr uint32_t SampleDispatches[] = { 300, 3000, 20000 };
 
 std::mutex _mutex;
+uint32_t _dispatchCount = 0;
 std::set<std::string> _configured;
 std::unordered_set<uint64_t> _queried;
 std::unordered_set<std::string> _dispatchShapes;
@@ -271,15 +274,24 @@ void LogQuery(const ffxApiHeader* header, ffxReturnCode_t result)
 
 void LogDispatch(const ffxApiHeader* header, ffxReturnCode_t result)
 {
+    uint32_t count = 0;
+
     {
         const auto shape = DispatchShape(header);
         std::scoped_lock lock(_mutex);
+        count = ++_dispatchCount;
 
-        if (_dispatchShapes.size() >= MaxDispatchShapes || !_dispatchShapes.insert(shape).second)
+        // A few samples well after the first frame too: the first one has no camera movement or history yet
+        const bool sample = std::find(std::begin(SampleDispatches), std::end(SampleDispatches), count) !=
+                            std::end(SampleDispatches);
+        const bool newShape = _dispatchShapes.size() < MaxDispatchShapes && _dispatchShapes.insert(shape).second;
+
+        if (!sample && !newShape)
             return;
     }
 
-    LOG_INFO("Game denoiser dispatch: {}, result: {}", DescChain(header), FfxApiProxy::ReturnCodeToString(result));
+    LOG_INFO("Game denoiser dispatch #{}: {}, result: {}", count, DescChain(header),
+             FfxApiProxy::ReturnCodeToString(result));
 
     for (; header != nullptr; header = header->pNext)
     {
