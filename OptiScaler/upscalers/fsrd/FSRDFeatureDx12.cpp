@@ -276,8 +276,11 @@ bool FSRDFeatureDx12::CreateDenoiserContext()
 
         if (FfxApiProxy::D3D12_Query(&_denoiserContext, &memoryDesc.header) == FFX_API_RETURN_OK)
         {
+            // Signed: denoiser 1.2.0 can report a negative total (seen as about -137 MB at 1280x720), which as an
+            // unsigned value read as 2^64 bytes
             LOG_INFO("Denoiser GPU memory: {:.1f} MB total, {:.1f} MB aliasable",
-                     usage.totalUsageInBytes / (1024.0 * 1024.0), usage.aliasableUsageInBytes / (1024.0 * 1024.0));
+                     static_cast<int64_t>(usage.totalUsageInBytes) / (1024.0 * 1024.0),
+                     static_cast<int64_t>(usage.aliasableUsageInBytes) / (1024.0 * 1024.0));
         }
 
         LogVideoMemory("denoiser context created");
