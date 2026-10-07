@@ -97,6 +97,7 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     ID3D12Resource* GetParticleLayer(NVSDK_NGX_Parameter* InParameters, ID3D12Resource* color);
     ID3D12Resource* BypassWithParticles(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters);
     bool CreateScratchResources();
+    bool ResizeForRenderSize(unsigned int renderWidth, unsigned int renderHeight);
     std::array<ID3D12Resource**, 13> ScratchResources();
     void ReleaseScratchResources();
     bool PrepareComposedColor(ID3D12Resource* color);

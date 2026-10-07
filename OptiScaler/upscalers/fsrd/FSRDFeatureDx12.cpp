@@ -378,6 +378,33 @@ void FSRDFeatureDx12::UpdateDebugView()
     }
 }
 
+bool FSRDFeatureDx12::ResizeForRenderSize(unsigned int renderWidth, unsigned int renderHeight)
+{
+    LOG_INFO("Render size {}x{} is larger than the denoiser's {}x{}, recreating its scratch and context", renderWidth,
+             renderHeight, _maxRenderWidth, _maxRenderHeight);
+
+    for (auto resource : { &_diffuseIn, &_diffuseOut, &_specularIn, &_specularOut, &_linearDepth, &_packedNormals,
+                           &_motionVectors })
+    {
+        Retire(*resource);
+    }
+
+    RetireDenoiserContext();
+
+    _maxRenderWidth = std::max(_maxRenderWidth, renderWidth);
+    _maxRenderHeight = std::max(_maxRenderHeight, renderHeight);
+
+    for (auto& sent : _tuningSent)
+        sent = false;
+
+    if (CreateScratchResources() && CreateDenoiserContext())
+        return true;
+
+    _denoiserFailures = MaxDenoiserFailures;
+    DisableDenoiserOnFailure("Can't recreate the denoiser for the new render size");
+    return false;
+}
+
 bool FSRDFeatureDx12::CreateScratchResources()
 {
     // Between frames: denoiser inputs rest in NON_PIXEL_SHADER_RESOURCE, denoiser outputs in UNORDERED_ACCESS
@@ -393,8 +420,8 @@ bool FSRDFeatureDx12::CreateScratchResources()
            CreateScratchTexture(Device, w, h, DXGI_FORMAT_R32_FLOAT, read, L"FSRD_LinearDepth", &_linearDepth) &&
            CreateScratchTexture(Device, w, h, ScratchFormat, read, L"FSRD_PackedNormals", &_packedNormals) &&
            CreateScratchTexture(Device, w, h, ScratchFormat, read, L"FSRD_MotionVectors", &_motionVectors) &&
-           CreateScratchTexture(Device, 2, 1, DXGI_FORMAT_R32_UINT, write, L"FSRD_SentinelCounter",
-                                &_sentinelCounter);
+           (_sentinelCounter != nullptr || CreateScratchTexture(Device, 2, 1, DXGI_FORMAT_R32_UINT, write,
+                                                                L"FSRD_SentinelCounter", &_sentinelCounter));
 }
 
 std::array<ID3D12Resource**, 13> FSRDFeatureDx12::ScratchResources()
@@ -855,9 +882,10 @@ bool FSRDFeatureDx12::InitInternal(ID3D12GraphicsCommandList* InCommandList, NVS
 
     _debugView = Config::Instance()->FsrdDebugView.value_or_default();
 
-    // Size scratch for the largest render size we can get, so dynamic resolution doesn't reallocate
-    _maxRenderWidth = std::max(RenderWidth(), DisplayWidth());
-    _maxRenderHeight = std::max(RenderHeight(), DisplayHeight());
+    // Scratch and the denoiser context start at the render size the feature was created with (it follows the
+    // game's output resolution and upscaling mode); a frame that renders larger grows them (ResizeForRenderSize)
+    _maxRenderWidth = RenderWidth() > 0 ? RenderWidth() : DisplayWidth();
+    _maxRenderHeight = RenderHeight() > 0 ? RenderHeight() : DisplayHeight();
 
     _prepass = std::make_unique<FsrdPass_Dx12>("FSRD Prepass", Device, 8, 6, fsrd_prepass_cso, sizeof(fsrd_prepass_cso));
     _compose = std::make_unique<FsrdPass_Dx12>("FSRD Compose", Device, 10, 2, fsrd_compose_cso, sizeof(fsrd_compose_cso));
@@ -904,11 +932,20 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
 
     unsigned int renderWidth = 0, renderHeight = 0;
     GetRenderResolution(InParameters, &renderWidth, &renderHeight);
-    renderWidth = std::min(renderWidth, _maxRenderWidth);
-    renderHeight = std::min(renderHeight, _maxRenderHeight);
 
     if (renderWidth == 0 || renderHeight == 0)
         return nullptr;
+
+    // Never larger than the game's color texture, which holds the render area
+    auto colorDesc = color->GetDesc();
+    renderWidth = std::min(renderWidth, (unsigned int) colorDesc.Width);
+    renderHeight = std::min(renderHeight, (unsigned int) colorDesc.Height);
+
+    if ((renderWidth > _maxRenderWidth || renderHeight > _maxRenderHeight) &&
+        !ResizeForRenderSize(renderWidth, renderHeight))
+    {
+        return nullptr;
+    }
 
     if (!PrepareComposedColor(color))
     {
@@ -1018,10 +1055,11 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
     const auto write = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
     // 1. Prepass: game resources -> denoiser inputs
-    ID3D12Resource* prepassOutputs[] = { _diffuseIn, _specularIn, _linearDepth, _packedNormals, _motionVectors };
-
-    for (auto resource : prepassOutputs)
-        ResourceBarrier(InCommandList, resource, read, write);
+    Barriers(InCommandList, { { _diffuseIn, read, write },
+                              { _specularIn, read, write },
+                              { _linearDepth, read, write },
+                              { _packedNormals, read, write },
+                              { _motionVectors, read, write } });
 
     const bool prepassOk = _prepass->Dispatch(
         InCommandList,
@@ -1031,8 +1069,11 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
         { _diffuseIn, _specularIn, _linearDepth, _packedNormals, _motionVectors, _sentinelCounter }, constants,
         renderWidth, renderHeight);
 
-    for (auto resource : prepassOutputs)
-        ResourceBarrier(InCommandList, resource, write, read);
+    Barriers(InCommandList, { { _diffuseIn, write, read },
+                              { _specularIn, write, read },
+                              { _linearDepth, write, read },
+                              { _packedNormals, write, read },
+                              { _motionVectors, write, read } });
 
     if (!prepassOk)
     {
@@ -1116,13 +1157,13 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
         debugDesc.mode = FFX_API_DENOISER_DEBUG_VIEW_MODE_OVERVIEW;
         specularDesc.header.pNext = &debugDesc.header;
 
-        ResourceBarrier(InCommandList, _composedColor, read, write);
+        Barriers(InCommandList, { { _composedColor, read, write } });
     }
 
     auto result = FfxApiProxy::D3D12_Dispatch(&_denoiserContext, &dispatchDesc.header);
 
     if (_debugView)
-        ResourceBarrier(InCommandList, _composedColor, write, read);
+        Barriers(InCommandList, { { _composedColor, write, read } });
 
     if (result != FFX_API_RETURN_OK)
     {
@@ -1141,10 +1182,10 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
     }
 
     // 3. Compose: denoised signals * albedo -> composed color
-    ResourceBarrier(InCommandList, _diffuseOut, write, read);
-    ResourceBarrier(InCommandList, _specularOut, write, read);
-    ResourceBarrier(InCommandList, _composedColor, read, write);
-    ResourceBarrier(InCommandList, _reactiveMask, read, write);
+    Barriers(InCommandList, { { _diffuseOut, write, read },
+                              { _specularOut, write, read },
+                              { _composedColor, read, write },
+                              { _reactiveMask, read, write } });
 
     auto gameReactive = GetResource(InParameters, NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_Mask);
 
@@ -1175,13 +1216,16 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
 
     constants.Flags = passFlags;
 
-    ResourceBarrier(InCommandList, _diffuseOut, read, write);
-    ResourceBarrier(InCommandList, _specularOut, read, write);
-    ResourceBarrier(InCommandList, _composedColor, write, read);
-    ResourceBarrier(InCommandList, _reactiveMask, write, read);
+    // With the restore on, its output goes to UAV in the same batch
+    Barriers(InCommandList, { { _diffuseOut, read, write },
+                              { _specularOut, read, write },
+                              { _composedColor, write, read },
+                              { _reactiveMask, write, read },
+                              { restoreOn ? _restoredColor : nullptr, read, write } });
 
     if (!composeOk)
     {
+        Barriers(InCommandList, { { restoreOn ? _restoredColor : nullptr, write, read } });
         DisableDenoiserOnFailure("FSRD compose dispatch failed");
         return nullptr;
     }
@@ -1192,13 +1236,12 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
         return _composedColor;
 
     // 4. Restore the low frequency part the denoiser removed (fog, haze), then the particles go over
-    ResourceBarrier(InCommandList, _restoredColor, read, write);
 
     const bool restoreOk = _restore->Dispatch(InCommandList, { color, _composedColor, _linearDepth, particles },
                                               { _restoredColor }, constants, (UINT) composedDesc.Width,
                                               composedDesc.Height);
 
-    ResourceBarrier(InCommandList, _restoredColor, write, read);
+    Barriers(InCommandList, { { _restoredColor, write, read } });
 
     return restoreOk ? _restoredColor : _composedColor;
 }
@@ -1264,12 +1307,12 @@ ID3D12Resource* FSRDFeatureDx12::BypassWithParticles(ID3D12GraphicsCommandList* 
     const auto write = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     auto outDesc = _restoredColor->GetDesc();
 
-    ResourceBarrier(InCommandList, _restoredColor, read, write);
+    Barriers(InCommandList, { { _restoredColor, read, write } });
 
     const bool ok = _restore->Dispatch(InCommandList, { color, color, nullptr, particles }, { _restoredColor },
                                        constants, (UINT) outDesc.Width, outDesc.Height);
 
-    ResourceBarrier(InCommandList, _restoredColor, write, read);
+    Barriers(InCommandList, { { _restoredColor, write, read } });
 
     return ok ? _restoredColor : nullptr;
 }
