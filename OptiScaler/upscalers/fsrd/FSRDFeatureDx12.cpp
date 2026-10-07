@@ -8,6 +8,7 @@
 #include <shaders/fsrd/precompile/fsrd_prepass_Shader.h>
 #include <shaders/fsrd/precompile/fsrd_compose_Shader.h>
 #include <shaders/fsrd/precompile/fsrd_restore_Shader.h>
+#include <shaders/fsrd/precompile/fsrd_probe_Shader.h>
 
 // FSR Ray Regeneration API (ffx_denoiser.h 1.2.0), wrapped so it builds on the same ffx_api.h OptiScaler already
 // uses -- see ffx_denoiser_compat.h for why the real header can't be included directly. ffxApiGetResourceDX12 comes
@@ -46,59 +47,47 @@ constexpr DXGI_FORMAT ScratchFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
 constexpr float SkyDepth = 60000.0f;
 constexpr float SkyDepthBound = 50000.0f;
 
-// Hit distance probe: screen points (fractions of the render size), texels per point, frames between rounds
+// Input probe: screen points (fractions of the render size, same as fsrd_probe.hlsl), RGBA32F texels per point
+// written by that shader, frames between rounds
 constexpr float ProbePoints[][2] = { { 0.5f, 0.5f }, { 0.5f, 0.8f }, { 0.3f, 0.7f }, { 0.7f, 0.7f }, { 0.5f, 0.95f } };
-constexpr int ProbePointCount = 5;
-// hit distance, linear depth, packed normals, game normals, diffuse albedo, specular albedo
-constexpr int ProbeTexelsPerPoint = 6;
-constexpr UINT ProbeTexelPitch = D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT; // 512, also covers the 256 row pitch
-// Per slot: the point texels, then one texel with the frame's sentinel count
-constexpr UINT ProbeCounterOffset = ProbePointCount * ProbeTexelsPerPoint * ProbeTexelPitch;
-constexpr UINT ProbeSlotSize = ProbeCounterOffset + ProbeTexelPitch;
+constexpr UINT ProbePointCount = 5;
+constexpr UINT ProbeTexelsPerPoint = 4; // (hit, depth, roughness, material), game normals, diffuse, specular albedo
+constexpr DXGI_FORMAT ProbeTexelFormat = DXGI_FORMAT_R32G32B32A32_FLOAT;
+constexpr UINT ProbeRowPitch = D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT; // 512 >= 20 texels * 16 bytes
+// Per readback slot: the probe texels row, then one texel with the frame's sentinel count
+constexpr UINT ProbeCounterOffset = ProbeRowPitch;
+constexpr UINT ProbeSlotSize = ProbeCounterOffset + D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT;
 constexpr uint32_t ProbeInterval = 120;
 constexpr uint32_t ProbeCaptureInterval = 8; // ~7 samples/s at 60 fps, still several frames for the GPU copy
 
-static float HalfToFloat(uint16_t h)
-{
-    const uint32_t sign = (h & 0x8000u) << 16;
-    uint32_t exponent = (h >> 10) & 0x1Fu;
-    uint32_t mantissa = h & 0x3FFu;
-    uint32_t bits;
-
-    if (exponent == 0)
-    {
-        if (mantissa == 0)
-        {
-            bits = sign;
-        }
-        else
-        {
-            // Subnormal half -> normal float
-            exponent = 127 - 15 + 1;
-            while ((mantissa & 0x400u) == 0)
-            {
-                mantissa <<= 1;
-                exponent--;
-            }
-            bits = sign | (exponent << 23) | ((mantissa & 0x3FFu) << 13);
-        }
-    }
-    else if (exponent == 0x1F)
-    {
-        bits = sign | 0x7F800000u | (mantissa << 13);
-    }
-    else
-    {
-        bits = sign | ((exponent + 127 - 15) << 23) | (mantissa << 13);
-    }
-
-    float result;
-    memcpy(&result, &bits, sizeof(result));
-    return result;
-}
-
 // Disable the denoiser for the session after this many failures, upscaling keeps running
 constexpr int MaxDenoiserFailures = 3;
+
+// Frames a replaced resource or denoiser context is kept alive, the GPU can still be running work that uses it
+constexpr uint32_t RetireFrames = 8;
+
+struct BarrierDesc
+{
+    ID3D12Resource* resource;
+    D3D12_RESOURCE_STATES before;
+    D3D12_RESOURCE_STATES after;
+};
+
+// One ResourceBarrier call for a group of transitions, null resources are skipped
+static void Barriers(ID3D12GraphicsCommandList* cmdList, std::initializer_list<BarrierDesc> transitions)
+{
+    D3D12_RESOURCE_BARRIER barriers[16];
+    UINT count = 0;
+
+    for (const auto& t : transitions)
+    {
+        if (t.resource != nullptr && t.before != t.after && count < std::size(barriers))
+            barriers[count++] = CD3DX12_RESOURCE_BARRIER::Transition(t.resource, t.before, t.after);
+    }
+
+    if (count > 0)
+        cmdList->ResourceBarrier(count, barriers);
+}
 
 static ID3D12Resource* GetResource(NVSDK_NGX_Parameter* InParameters, const char* key)
 {
@@ -199,8 +188,66 @@ FSRDFeatureDx12::~FSRDFeatureDx12()
     if (State::Instance().isShuttingDown)
         return;
 
-    DestroyDenoiserContext();
-    ReleaseScratchResources();
+    // The game can release the feature right after its last frame was submitted: everything the GPU may still use
+    // (denoiser contexts, scratch textures, the passes' heaps and constant buffers) is released a bit later, like
+    // Util::DelayedDestroy does
+    RetireDenoiserContext();
+
+    for (auto resource : ScratchResources())
+        Retire(*resource);
+
+    std::thread(
+        [retired = std::move(_retired), prepass = std::move(_prepass), compose = std::move(_compose),
+         restore = std::move(_restore), probe = std::move(_probePass)]() mutable
+        {
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+
+            for (auto& item : retired)
+                ReleaseRetiredObject(item);
+        })
+        .detach();
+}
+
+void FSRDFeatureDx12::ReleaseRetiredObject(RetiredObject& item)
+{
+    if (item.resource != nullptr)
+        item.resource->Release();
+
+    if (item.context != nullptr)
+        FfxApiProxy::D3D12_DestroyContext(&item.context, nullptr);
+
+    item = {};
+}
+
+void FSRDFeatureDx12::Retire(ID3D12Resource*& resource)
+{
+    if (resource == nullptr)
+        return;
+
+    _retired.push_back({ resource, nullptr, _evalFrame });
+    resource = nullptr;
+}
+
+void FSRDFeatureDx12::RetireDenoiserContext()
+{
+    if (_denoiserContextCreated && _denoiserContext != nullptr)
+        _retired.push_back({ nullptr, _denoiserContext, _evalFrame });
+
+    _denoiserContext = nullptr;
+    _denoiserContextCreated = false;
+}
+
+void FSRDFeatureDx12::ReleaseRetired()
+{
+    std::erase_if(_retired,
+                  [this](RetiredObject& item)
+                  {
+                      if (_evalFrame - item.frame < RetireFrames)
+                          return false;
+
+                      ReleaseRetiredObject(item);
+                      return true;
+                  });
 }
 
 void FSRDFeatureDx12::ProcessInitParams(NVSDK_NGX_Parameter* InParameters)
@@ -309,44 +356,16 @@ bool FSRDFeatureDx12::CreateDenoiserContext()
     return true;
 }
 
-void FSRDFeatureDx12::DestroyDenoiserContext()
-{
-    if (_retiredContext != nullptr)
-    {
-        FfxApiProxy::D3D12_DestroyContext(&_retiredContext, nullptr);
-        _retiredContext = nullptr;
-    }
-
-    if (!_denoiserContextCreated)
-        return;
-
-    FfxApiProxy::D3D12_DestroyContext(&_denoiserContext, nullptr);
-    _denoiserContext = nullptr;
-    _denoiserContextCreated = false;
-}
-
 void FSRDFeatureDx12::UpdateDebugView()
 {
-    // Frames the GPU can still be using the replaced context
-    constexpr uint32_t RetireFrames = 8;
-
-    if (_retiredContext != nullptr && ++_retiredFrames > RetireFrames)
-    {
-        FfxApiProxy::D3D12_DestroyContext(&_retiredContext, nullptr);
-        _retiredContext = nullptr;
-    }
-
     // The debug view needs a context created with FFX_DENOISER_ENABLE_DEBUGGING, so switching it from the menu
     // creates a new context; the old one is kept until the GPU is done with it
     const bool debugView = Config::Instance()->FsrdDebugView.value_or_default();
 
-    if (debugView == _debugView || !_denoiserContextCreated || _denoiserDisabled || _retiredContext != nullptr)
+    if (debugView == _debugView || !_denoiserContextCreated || _denoiserDisabled)
         return;
 
-    _retiredContext = _denoiserContext;
-    _retiredFrames = 0;
-    _denoiserContext = nullptr;
-    _denoiserContextCreated = false;
+    RetireDenoiserContext();
     _debugView = debugView;
 
     for (auto& sent : _tuningSent)
@@ -378,20 +397,18 @@ bool FSRDFeatureDx12::CreateScratchResources()
                                 &_sentinelCounter);
 }
 
+std::array<ID3D12Resource**, 13> FSRDFeatureDx12::ScratchResources()
+{
+    return { &_diffuseIn,      &_diffuseOut,    &_specularIn,   &_specularOut,    &_linearDepth,
+             &_packedNormals,  &_motionVectors, &_sentinelCounter, &_composedColor, &_reactiveMask,
+             &_restoredColor,  &_probeReadback, &_probeTexels };
+}
+
 void FSRDFeatureDx12::ReleaseScratchResources()
 {
-    SAFE_RELEASE(_diffuseIn);
-    SAFE_RELEASE(_diffuseOut);
-    SAFE_RELEASE(_specularIn);
-    SAFE_RELEASE(_specularOut);
-    SAFE_RELEASE(_linearDepth);
-    SAFE_RELEASE(_packedNormals);
-    SAFE_RELEASE(_motionVectors);
-    SAFE_RELEASE(_sentinelCounter);
-    SAFE_RELEASE(_composedColor);
-    SAFE_RELEASE(_reactiveMask);
-    SAFE_RELEASE(_restoredColor);
-    SAFE_RELEASE(_probeReadback);
+    // Only for resources no recorded GPU work uses yet (init failure)
+    for (auto resource : ScratchResources())
+        SAFE_RELEASE(*resource);
 }
 
 bool FSRDFeatureDx12::PrepareComposedColor(ID3D12Resource* color)
@@ -407,22 +424,10 @@ bool FSRDFeatureDx12::PrepareComposedColor(ID3D12Resource* color)
             return true;
     }
 
-    // Can still be in flight from the previous frame, release them later like Util::DelayedDestroy does
-    for (auto* resource : { &_composedColor, &_reactiveMask, &_restoredColor })
-    {
-        if (*resource == nullptr)
-            continue;
-
-        std::thread(
-            [old = *resource]()
-            {
-                std::this_thread::sleep_for(std::chrono::seconds(2));
-                old->Release();
-            })
-            .detach();
-
-        *resource = nullptr;
-    }
+    // Can still be in flight from the previous frames
+    Retire(_composedColor);
+    Retire(_reactiveMask);
+    Retire(_restoredColor);
 
     const auto read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
@@ -442,7 +447,7 @@ void FSRDFeatureDx12::DisableDenoiserOnFailure(const char* reason)
         return;
 
     LOG_ERROR("Disabling FSR Ray Regeneration after {} failures, only upscaling from now on", _denoiserFailures);
-    DestroyDenoiserContext();
+    RetireDenoiserContext();
     _denoiserDisabled = true;
 }
 
@@ -523,10 +528,10 @@ void FSRDFeatureDx12::FinishProbeCapture()
     _captureDoneUntilNs.store(NowNs() + SecondsToNs(ProbeCaptureDoneSeconds));
 }
 
-void FSRDFeatureDx12::ProbeInputs(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* specularHitDistance,
-                                  ID3D12Resource* normals, ID3D12Resource* diffuseAlbedo,
-                                  ID3D12Resource* specularAlbedo, const float view[4][4], unsigned int renderWidth,
-                                  unsigned int renderHeight)
+void FSRDFeatureDx12::ProbeInputs(ID3D12GraphicsCommandList* cmdList, const FsrdPass_Dx12::Constants& constants,
+                                  ID3D12Resource* specularHitDistance, ID3D12Resource* normals,
+                                  ID3D12Resource* diffuseAlbedo, ID3D12Resource* specularAlbedo,
+                                  const float view[4][4])
 {
     const int64_t nowNs = NowNs();
 
@@ -574,22 +579,26 @@ void FSRDFeatureDx12::ProbeInputs(ID3D12GraphicsCommandList* cmdList, ID3D12Reso
 
     const uint32_t interval = _captureActive ? ProbeCaptureInterval : ProbeInterval;
 
-    if (++_probeFrame % interval != 0)
+    if (++_probeFrame % interval != 0 || _probePass == nullptr || !_probePass->CanRender())
         return;
 
     const int slot = _probeRound++ % 2;
     const int otherSlot = 1 - slot;
 
-    if (_probeReadback == nullptr)
+    if (_probeReadback == nullptr || _probeTexels == nullptr)
     {
         auto desc = CD3DX12_RESOURCE_DESC::Buffer(ProbeSlotSize * 2);
         auto heapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_READBACK);
 
         if (FAILED(Device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &desc,
                                                    D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-                                                   IID_PPV_ARGS(&_probeReadback))))
+                                                   IID_PPV_ARGS(&_probeReadback))) ||
+            !CreateScratchTexture(Device, ProbePointCount * ProbeTexelsPerPoint, 1, ProbeTexelFormat,
+                                  D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"FSRD_ProbeTexels", &_probeTexels))
         {
-            LOG_ERROR("Can't create the probe readback buffer");
+            LOG_ERROR("Can't create the probe resources");
+            SAFE_RELEASE(_probeReadback);
+            SAFE_RELEASE(_probeTexels);
             _probeFrame = 0x7FFFFFFF; // don't try again for a long time
             return;
         }
@@ -603,192 +612,135 @@ void FSRDFeatureDx12::ProbeInputs(ID3D12GraphicsCommandList* cmdList, ID3D12Reso
 
         if (SUCCEEDED(_probeReadback->Map(0, &range, (void**) &data)))
         {
-            // Only data copied during the running capture counts for its summary and gets its tag
-            const int slotCapture = _probeSlotCapture[otherSlot];
-            const bool inCapture = _captureActive && slotCapture == _captureId.load();
-            const std::string tag =
-                inCapture ? std::format("[cap #{} {}] ", slotCapture, ProbeCaptureLabels[_captureLabel]) : "";
-
-            // Camera axes in world space are the columns of the row-vector view rotation
-            const auto& v = _probeView[otherSlot];
-            LOG_INFO("{}Probe camera: right ({:.3f}, {:.3f}, {:.3f}), up ({:.3f}, {:.3f}, {:.3f}), "
-                     "forward ({:.3f}, {:.3f}, {:.3f})",
-                     tag, v[0][0], v[1][0], v[2][0], v[0][1], v[1][1], v[2][1], v[0][2], v[1][2], v[2][2]);
-
-            for (int i = 0; i < ProbePointCount; i++)
-            {
-                const uint8_t* texels = data + otherSlot * ProbeSlotSize + i * ProbeTexelsPerPoint * ProbeTexelPitch;
-
-                float hitDistance = 0.0f, linearDepth = 0.0f;
-                uint16_t packed[4] {}, gameNormals[4] {};
-                uint8_t diffuse[4] {}, specular[4] {};
-                memcpy(&hitDistance, texels, sizeof(float));
-                memcpy(&linearDepth, texels + ProbeTexelPitch, sizeof(float));
-                memcpy(packed, texels + 2 * ProbeTexelPitch, sizeof(packed));
-                memcpy(gameNormals, texels + 3 * ProbeTexelPitch, sizeof(gameNormals));
-                memcpy(diffuse, texels + 4 * ProbeTexelPitch, sizeof(diffuse));
-                memcpy(specular, texels + 5 * ProbeTexelPitch, sizeof(specular));
-
-                LOG_INFO("{}Probe ({:.2f}, {:.2f}): spec hit distance: {}, linear depth: {:.3f}, roughness used: "
-                         "{:.3f}",
-                         tag, ProbePoints[i][0], ProbePoints[i][1],
-                         _probeHasHitDistance[otherSlot] ? std::to_string(hitDistance) : std::string("n/a"),
-                         linearDepth, HalfToFloat(packed[2]));
-                const float n[3] = { HalfToFloat(gameNormals[0]), HalfToFloat(gameNormals[1]),
-                                     HalfToFloat(gameNormals[2]) };
-
-                // If the game's normals are world space, this is them in view space: n * R (row vector)
-                const float nv[3] = { n[0] * v[0][0] + n[1] * v[1][0] + n[2] * v[2][0],
-                                      n[0] * v[0][1] + n[1] * v[1][1] + n[2] * v[2][1],
-                                      n[0] * v[0][2] + n[1] * v[1][2] + n[2] * v[2][2] };
-
-                LOG_INFO("{}    game normals: ({:.3f}, {:.3f}, {:.3f}, {:.3f}) len {:.3f}, as view space: "
-                         "({:.3f}, {:.3f}, {:.3f}), diffuse albedo: ({}, {}, {}, {}), specular albedo: ({}, {}, {}, {})",
-                         tag, n[0], n[1], n[2], HalfToFloat(gameNormals[3]),
-                         sqrtf(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]), nv[0], nv[1], nv[2], diffuse[0], diffuse[1],
-                         diffuse[2], diffuse[3], specular[0], specular[1], specular[2], specular[3]);
-
-                if (inCapture)
-                {
-                    auto& st = _captureStats[i];
-                    const float rough = HalfToFloat(packed[2]);
-                    const float alpha = HalfToFloat(gameNormals[3]);
-
-                    st.count++;
-                    st.hitMin = std::min(st.hitMin, hitDistance);
-                    st.hitMax = std::max(st.hitMax, hitDistance);
-                    st.depthMin = std::min(st.depthMin, linearDepth);
-                    st.depthMax = std::max(st.depthMax, linearDepth);
-                    st.roughMin = std::min(st.roughMin, rough);
-                    st.roughMax = std::max(st.roughMax, rough);
-                    st.alphaMin = std::min(st.alphaMin, alpha);
-                    st.alphaMax = std::max(st.alphaMax, alpha);
-
-                    for (int c = 0; c < 3; c++)
-                    {
-                        st.normalSum[c] += n[c];
-                        st.viewNormalSum[c] += nv[c];
-                    }
-                }
-            }
-
-            uint32_t sentinels = 0;
-            memcpy(&sentinels, data + otherSlot * ProbeSlotSize + ProbeCounterOffset, sizeof(sentinels));
-
-            if (_probePixels[otherSlot] > 0)
-            {
-                const float percent = 100.0f * (float) sentinels / (float) _probePixels[otherSlot];
-                LOG_INFO("{}Probe sentinel pixels: {:.2f}% ({} of {})", tag, percent, sentinels,
-                         _probePixels[otherSlot]);
-
-                if (inCapture)
-                {
-                    _captureSentinelMin = std::min(_captureSentinelMin, percent);
-                    _captureSentinelMax = std::max(_captureSentinelMax, percent);
-                    _captureSentinelSum += percent;
-                    _captureSentinelCount++;
-                }
-            }
+            LogProbeSlot(data + otherSlot * ProbeSlotSize, otherSlot);
 
             D3D12_RANGE noWrite { 0, 0 };
             _probeReadback->Unmap(0, &noWrite);
         }
     }
 
-    // Copy this round's texels
-    const auto read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-    const auto copy = D3D12_RESOURCE_STATE_COPY_SOURCE;
-    // Only formats the readback above understands, anything else is skipped
-    auto formatIs = [](ID3D12Resource* resource, std::initializer_list<DXGI_FORMAT> formats)
+    // This round: the probe shader reads the inputs at the points into _probeTexels (game resources only through
+    // SRVs, their state is never changed), then _probeTexels and this frame's sentinel count go to the readback
+    if (!_probePass->Dispatch(cmdList,
+                              { specularHitDistance, normals, diffuseAlbedo, specularAlbedo, _linearDepth,
+                                _packedNormals },
+                              { _probeTexels }, constants, ProbePointCount, 1))
     {
-        if (resource == nullptr)
-            return false;
-
-        auto format = resource->GetDesc().Format;
-        return std::find(formats.begin(), formats.end(), format) != formats.end();
-    };
-
-    const auto rgba16 = { DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R16G16B16A16_TYPELESS };
-    const auto rgba8 = { DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_TYPELESS };
-
-    ID3D12Resource* sources[ProbeTexelsPerPoint] = {
-        formatIs(specularHitDistance, { DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R32_TYPELESS }) ? specularHitDistance
-                                                                                         : nullptr,
-        _linearDepth,
-        _packedNormals,
-        formatIs(normals, rgba16) ? normals : nullptr,
-        formatIs(diffuseAlbedo, rgba8) ? diffuseAlbedo : nullptr,
-        formatIs(specularAlbedo, rgba8) ? specularAlbedo : nullptr,
-    };
-
-    for (auto source : sources)
-    {
-        if (source != nullptr)
-            ResourceBarrier(cmdList, source, read, copy);
+        return;
     }
+
+    const auto uav = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    const auto copy = D3D12_RESOURCE_STATE_COPY_SOURCE;
+
+    Barriers(cmdList, { { _probeTexels, uav, copy }, { _sentinelCounter, uav, copy } });
+
+    D3D12_TEXTURE_COPY_LOCATION dst {};
+    dst.pResource = _probeReadback;
+    dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    dst.PlacedFootprint.Offset = slot * ProbeSlotSize;
+    dst.PlacedFootprint.Footprint = { ProbeTexelFormat, ProbePointCount * ProbeTexelsPerPoint, 1, 1,
+                                      ProbeRowPitch };
+
+    D3D12_TEXTURE_COPY_LOCATION src {};
+    src.pResource = _probeTexels;
+    src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    src.SubresourceIndex = 0;
+
+    cmdList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+
+    dst.PlacedFootprint.Offset = slot * ProbeSlotSize + ProbeCounterOffset;
+    dst.PlacedFootprint.Footprint = { DXGI_FORMAT_R32_UINT, 1, 1, 1, D3D12_TEXTURE_DATA_PITCH_ALIGNMENT };
+    src.pResource = _sentinelCounter;
+
+    D3D12_BOX box { _probeCounterSlot, 0, 0, _probeCounterSlot + 1, 1, 1 };
+    cmdList->CopyTextureRegion(&dst, 0, 0, 0, &src, &box);
+
+    Barriers(cmdList, { { _probeTexels, copy, uav }, { _sentinelCounter, copy, uav } });
+
+    _probePixels[slot] = constants.RenderWidth * constants.RenderHeight;
+    _probeSlotWritten[slot] = true;
+    memcpy(_probeView[slot], view, sizeof(_probeView[slot]));
+    _probeSlotCapture[slot] = _captureActive ? _captureId.load() : 0;
+}
+
+void FSRDFeatureDx12::LogProbeSlot(const uint8_t* data, int slot)
+{
+    // Only data copied during the running capture counts for its summary and gets its tag
+    const int slotCapture = _probeSlotCapture[slot];
+    const bool inCapture = _captureActive && slotCapture == _captureId.load();
+    const std::string tag = inCapture ? std::format("[cap #{} {}] ", slotCapture, ProbeCaptureLabels[_captureLabel]) : "";
+
+    // Camera axes in world space are the columns of the row-vector view rotation
+    const auto& v = _probeView[slot];
+    LOG_INFO("{}Probe camera: right ({:.3f}, {:.3f}, {:.3f}), up ({:.3f}, {:.3f}, {:.3f}), "
+             "forward ({:.3f}, {:.3f}, {:.3f})",
+             tag, v[0][0], v[1][0], v[2][0], v[0][1], v[1][1], v[2][1], v[0][2], v[1][2], v[2][2]);
 
     for (int i = 0; i < ProbePointCount; i++)
     {
-        const UINT x = std::min((UINT) (ProbePoints[i][0] * renderWidth), renderWidth - 1);
-        const UINT y = std::min((UINT) (ProbePoints[i][1] * renderHeight), renderHeight - 1);
+        // Layout written by fsrd_probe.hlsl: (hit, depth, roughness, material), game normals, diffuse, specular
+        float t[ProbeTexelsPerPoint][4] {};
+        memcpy(t, data + i * ProbeTexelsPerPoint * sizeof(t[0]), sizeof(t));
 
-        for (int t = 0; t < ProbeTexelsPerPoint; t++)
+        const float hitDistance = t[0][0], linearDepth = t[0][1], rough = t[0][2];
+        const float* n = t[1];
+        const float* diffuse = t[2];
+        const float* specular = t[3];
+
+        LOG_INFO("{}Probe ({:.2f}, {:.2f}): spec hit distance: {}, linear depth: {:.3f}, roughness used: {:.3f}, "
+                 "material: {:.0f}",
+                 tag, ProbePoints[i][0], ProbePoints[i][1],
+                 hitDistance >= 0.0f ? std::to_string(hitDistance) : std::string("n/a"), linearDepth, rough, t[0][3]);
+
+        // If the game's normals are world space, this is them in view space: n * R (row vector)
+        const float nv[3] = { n[0] * v[0][0] + n[1] * v[1][0] + n[2] * v[2][0],
+                              n[0] * v[0][1] + n[1] * v[1][1] + n[2] * v[2][1],
+                              n[0] * v[0][2] + n[1] * v[1][2] + n[2] * v[2][2] };
+
+        LOG_INFO("{}    game normals: ({:.3f}, {:.3f}, {:.3f}, {:.3f}) len {:.3f}, as view space: "
+                 "({:.3f}, {:.3f}, {:.3f}), diffuse albedo: ({:.3f}, {:.3f}, {:.3f}), specular albedo: ({:.3f}, "
+                 "{:.3f}, {:.3f})",
+                 tag, n[0], n[1], n[2], n[3], sqrtf(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]), nv[0], nv[1], nv[2],
+                 diffuse[0], diffuse[1], diffuse[2], specular[0], specular[1], specular[2]);
+
+        if (inCapture)
         {
-            if (sources[t] == nullptr)
-                continue;
+            auto& st = _captureStats[i];
 
-            auto sourceDesc = sources[t]->GetDesc();
+            st.count++;
+            st.hitMin = std::min(st.hitMin, hitDistance);
+            st.hitMax = std::max(st.hitMax, hitDistance);
+            st.depthMin = std::min(st.depthMin, linearDepth);
+            st.depthMax = std::max(st.depthMax, linearDepth);
+            st.roughMin = std::min(st.roughMin, rough);
+            st.roughMax = std::max(st.roughMax, rough);
+            st.alphaMin = std::min(st.alphaMin, n[3]);
+            st.alphaMax = std::max(st.alphaMax, n[3]);
 
-            D3D12_TEXTURE_COPY_LOCATION dst {};
-            dst.pResource = _probeReadback;
-            dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-            dst.PlacedFootprint.Offset = slot * ProbeSlotSize + (i * ProbeTexelsPerPoint + t) * ProbeTexelPitch;
-            dst.PlacedFootprint.Footprint = { sourceDesc.Format, 1, 1, 1, D3D12_TEXTURE_DATA_PITCH_ALIGNMENT };
-
-            D3D12_TEXTURE_COPY_LOCATION src {};
-            src.pResource = sources[t];
-            src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-            src.SubresourceIndex = 0;
-
-            D3D12_BOX box { x, y, 0, x + 1, y + 1, 1 };
-            cmdList->CopyTextureRegion(&dst, 0, 0, 0, &src, &box);
+            for (int c = 0; c < 3; c++)
+            {
+                st.normalSum[c] += n[c];
+                st.viewNormalSum[c] += nv[c];
+            }
         }
     }
 
-    for (auto source : sources)
+    uint32_t sentinels = 0;
+    memcpy(&sentinels, data + ProbeCounterOffset, sizeof(sentinels));
+
+    if (_probePixels[slot] > 0)
     {
-        if (source != nullptr)
-            ResourceBarrier(cmdList, source, copy, read);
+        const float percent = 100.0f * (float) sentinels / (float) _probePixels[slot];
+        LOG_INFO("{}Probe sentinel pixels: {:.2f}% ({} of {})", tag, percent, sentinels, _probePixels[slot]);
+
+        if (inCapture)
+        {
+            _captureSentinelMin = std::min(_captureSentinelMin, percent);
+            _captureSentinelMax = std::max(_captureSentinelMax, percent);
+            _captureSentinelSum += percent;
+            _captureSentinelCount++;
+        }
     }
-
-    // This frame's sentinel count, written by the prepass
-    if (_sentinelCounter != nullptr)
-    {
-        const auto uav = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-        ResourceBarrier(cmdList, _sentinelCounter, uav, copy);
-
-        D3D12_TEXTURE_COPY_LOCATION dst {};
-        dst.pResource = _probeReadback;
-        dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-        dst.PlacedFootprint.Offset = slot * ProbeSlotSize + ProbeCounterOffset;
-        dst.PlacedFootprint.Footprint = { DXGI_FORMAT_R32_UINT, 1, 1, 1, D3D12_TEXTURE_DATA_PITCH_ALIGNMENT };
-
-        D3D12_TEXTURE_COPY_LOCATION src {};
-        src.pResource = _sentinelCounter;
-        src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-        src.SubresourceIndex = 0;
-
-        D3D12_BOX box { _probeCounterSlot, 0, 0, _probeCounterSlot + 1, 1, 1 };
-        cmdList->CopyTextureRegion(&dst, 0, 0, 0, &src, &box);
-
-        ResourceBarrier(cmdList, _sentinelCounter, copy, uav);
-    }
-
-    _probePixels[slot] = renderWidth * renderHeight;
-    _probeSlotWritten[slot] = true;
-    _probeHasHitDistance[slot] = sources[0] != nullptr;
-    memcpy(_probeView[slot], view, sizeof(_probeView[slot]));
-    _probeSlotCapture[slot] = _captureActive ? _captureId.load() : 0;
 }
 
 void FSRDFeatureDx12::LogInputsOnce(NVSDK_NGX_Parameter* InParameters)
@@ -910,6 +862,8 @@ bool FSRDFeatureDx12::InitInternal(ID3D12GraphicsCommandList* InCommandList, NVS
     _prepass = std::make_unique<FsrdPass_Dx12>("FSRD Prepass", Device, 8, 6, fsrd_prepass_cso, sizeof(fsrd_prepass_cso));
     _compose = std::make_unique<FsrdPass_Dx12>("FSRD Compose", Device, 10, 2, fsrd_compose_cso, sizeof(fsrd_compose_cso));
     _restore = std::make_unique<FsrdPass_Dx12>("FSRD Restore", Device, 4, 1, fsrd_restore_cso, sizeof(fsrd_restore_cso));
+    // Diagnostics only, the denoiser works without it
+    _probePass = std::make_unique<FsrdPass_Dx12>("FSRD Probe", Device, 6, 1, fsrd_probe_cso, sizeof(fsrd_probe_cso));
 
     if (!_prepass->CanRender() || !_compose->CanRender() || !_restore->CanRender() || !CreateScratchResources() ||
         !CreateDenoiserContext())
@@ -919,6 +873,7 @@ bool FSRDFeatureDx12::InitInternal(ID3D12GraphicsCommandList* InCommandList, NVS
         _prepass.reset();
         _compose.reset();
         _restore.reset();
+        _probePass.reset();
         _denoiserDisabled = true;
     }
 
@@ -1181,8 +1136,7 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
     if (_debugView)
     {
         // The probe reads the inputs, which are the same in debug view
-        ProbeInputs(InCommandList, specularHitDistance, normals, diffuseAlbedo, specularAlbedo, viewRows,
-                    renderWidth, renderHeight);
+        ProbeInputs(InCommandList, constants, specularHitDistance, normals, diffuseAlbedo, specularAlbedo, viewRows);
         return _composedColor;
     }
 
@@ -1232,8 +1186,7 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
         return nullptr;
     }
 
-    ProbeInputs(InCommandList, specularHitDistance, normals, diffuseAlbedo, specularAlbedo, viewRows, renderWidth,
-                renderHeight);
+    ProbeInputs(InCommandList, constants, specularHitDistance, normals, diffuseAlbedo, specularAlbedo, viewRows);
 
     if (!restoreOn)
         return _composedColor;
@@ -1324,6 +1277,9 @@ ID3D12Resource* FSRDFeatureDx12::BypassWithParticles(ID3D12GraphicsCommandList* 
 bool FSRDFeatureDx12::EvaluateInternal(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters)
 {
     LogInputsOnce(InParameters);
+
+    _evalFrame++;
+    ReleaseRetired();
 
     ID3D12Resource* composed = nullptr;
 

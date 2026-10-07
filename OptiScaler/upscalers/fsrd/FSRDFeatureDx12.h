@@ -17,15 +17,14 @@
 #include <shaders/fsrd/FsrdPass_Dx12.h>
 #include <memory>
 #include <atomic>
+#include <array>
 #include <chrono>
+#include <vector>
 
 class FSRDFeatureDx12 : public FFXFeatureDx12
 {
   private:
     ffxContext _denoiserContext = nullptr;
-    // Context replaced by a debug view switch, destroyed a few frames later when the GPU is done with it
-    ffxContext _retiredContext = nullptr;
-    uint32_t _retiredFrames = 0;
     bool _denoiserContextCreated = false;
     bool _denoiserDisabled = false; // set by config or after repeated failures
     int _denoiserFailures = 0;
@@ -38,7 +37,7 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     bool _roughnessPacked = false;
     bool _hwDepth = false;
 
-    // [FSRD] DebugView, needs the context created with debugging so it's only read at init
+    // [FSRD] DebugView, needs a context created with debugging: switching it recreates the context
     bool _debugView = false;
 
     // Split mode of the last frame, the history is reset when it changes from the menu
@@ -73,26 +72,43 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     std::unique_ptr<FsrdPass_Dx12> _prepass;
     std::unique_ptr<FsrdPass_Dx12> _compose;
     std::unique_ptr<FsrdPass_Dx12> _restore;
+    std::unique_ptr<FsrdPass_Dx12> _probePass;
+
+    // Replaced resources and denoiser contexts, released RetireFrames evaluations later (the GPU can still be
+    // running work that uses them)
+    struct RetiredObject
+    {
+        ID3D12Resource* resource = nullptr;
+        ffxContext context = nullptr;
+        uint32_t frame = 0;
+    };
+
+    std::vector<RetiredObject> _retired;
+    uint32_t _evalFrame = 0;
+    void Retire(ID3D12Resource*& resource);
+    void RetireDenoiserContext();
+    void ReleaseRetired();
+    static void ReleaseRetiredObject(RetiredObject& item);
 
     bool _loggedInputsOnce = false;
 
     bool CreateDenoiserContext();
-    void DestroyDenoiserContext();
     void UpdateDebugView();
     ID3D12Resource* GetParticleLayer(NVSDK_NGX_Parameter* InParameters, ID3D12Resource* color);
     ID3D12Resource* BypassWithParticles(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters);
     bool CreateScratchResources();
+    std::array<ID3D12Resource**, 13> ScratchResources();
     void ReleaseScratchResources();
     bool PrepareComposedColor(ID3D12Resource* color);
     void DisableDenoiserOnFailure(const char* reason);
     void ApplyTuning();
 
-    // Logs the game's specular hit distance, our linear depth and roughness at a few screen points every ~2 s,
-    // to check the hit distance's units. Copies 1 texel per point into a readback buffer, read 2 rounds later.
+    // Logs the inputs at a few screen points (during captures, or every ~2 s with [FSRD] Diagnostics). The
+    // fsrd_probe shader reads them into _probeTexels, which is copied into a readback buffer read 2 rounds later.
     ID3D12Resource* _probeReadback = nullptr;
+    ID3D12Resource* _probeTexels = nullptr;
     uint32_t _probeFrame = 0;
     bool _probeSlotWritten[2] {};
-    bool _probeHasHitDistance[2] {};
     float _probeView[2][4][4] {}; // WorldToViewMatrix of each round, to tell world from view space normals
     uint32_t _probeRound = 0;
     int _probeSlotCapture[2] {};   // capture id each slot was copied for, 0 = regular probe
@@ -123,9 +139,10 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     bool _captureActive = false;
     ProbeStats _captureStats[5];
     void FinishProbeCapture();
-    void ProbeInputs(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* specularHitDistance, ID3D12Resource* normals,
-                     ID3D12Resource* diffuseAlbedo, ID3D12Resource* specularAlbedo, const float view[4][4],
-                     unsigned int renderWidth, unsigned int renderHeight);
+    void ProbeInputs(ID3D12GraphicsCommandList* cmdList, const FsrdPass_Dx12::Constants& constants,
+                     ID3D12Resource* specularHitDistance, ID3D12Resource* normals, ID3D12Resource* diffuseAlbedo,
+                     ID3D12Resource* specularAlbedo, const float view[4][4]);
+    void LogProbeSlot(const uint8_t* data, int slot);
 
     void LogInputsOnce(NVSDK_NGX_Parameter* InParameters);
     void ProcessInitParams(NVSDK_NGX_Parameter* InParameters);
