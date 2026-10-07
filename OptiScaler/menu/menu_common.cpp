@@ -2759,38 +2759,6 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                 else
                     ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)),
                                        "Denoiser off, only upscaling (see OptiScaler.log)");
-
-                // Diagnostic capture: tags the probe lines in the log and writes a per point summary
-                if (auto probe = fsrd->Probe(); probe != nullptr)
-                {
-                    static int captureLabel = 0;
-                    ImGui::PushItemWidth(120.0f * menuResScale);
-                    ImGui::Combo("##ProbeCaptureLabel", &captureLabel, FsrdProbe::CaptureLabels,
-                                 FsrdProbe::CaptureLabelCount);
-                    ImGui::PopItemWidth();
-                    ImGui::SameLine();
-
-                    const float remaining = probe->CaptureRemaining();
-
-                    if (probe->CapturePending())
-                    {
-                        ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)),
-                                           "Starts in %.1f s, close the menu", probe->CaptureCountdown());
-                    }
-                    else if (remaining > 0.0f)
-                    {
-                        ImGui::TextColored(toneMapColor(ImVec4(0.3f, 0.8f, 1.f, 1.f)), "Capturing #%d: %.1f s",
-                                           probe->CaptureCount(), remaining);
-                    }
-                    else if (ImGui::Button("Start capture (10 s)"))
-                    {
-                        probe->StartCapture(captureLabel);
-                    }
-
-                    ShowHelpMarker("Records the denoiser inputs at 5 screen points for 10 s\n"
-                                   "(~7 samples/s) and writes a summary per point to OptiScaler.log.\n"
-                                   "Starts 2 s after pressing: close the menu, a timer shows on screen.");
-                }
             }
 
             ImGui::PushItemWidth(220.0f * menuResScale);
@@ -2830,20 +2798,6 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
             ShowHelpMarker("Multiplier for the game's specular ray hit distance\n"
                            "Used to reproject reflections, a wrong scale causes ghosting and noisy mirrors");
 
-            float lowFreqRestore = config->FsrdLowFreqRestore.value_or_default();
-            if (ImGui::SliderFloat("Low-Freq Restore", &lowFreqRestore, 0.0f, 1.0f, "%.2f"))
-                config->FsrdLowFreqRestore = lowFreqRestore;
-
-            ShowHelpMarker("Puts back fog and haze the denoiser removes\n"
-                           "(blurred difference between the game's color and the denoised one)\n"
-                           "0 = off, 1 = full");
-
-            float lowFreqRadius = config->FsrdLowFreqRadius.value_or_default();
-            if (ImGui::SliderFloat("Low-Freq Radius", &lowFreqRadius, 4.0f, 96.0f, "%.0f px"))
-                config->FsrdLowFreqRadius = lowFreqRadius;
-
-            ShowHelpMarker("Blur radius of the restore, larger is smoother but can bring back noise blotches");
-
             const char* particleModes[] = { "Off", "Over denoised color", "Show raw texture (debug)" };
             int particleLayer = std::clamp(config->FsrdParticleLayer.value_or_default(), 0, 2);
 
@@ -2865,46 +2819,6 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                            "(V's body, first person arms and weapon, some far objects)\n"
                            "Passthrough: keep the game's color, no denoise\n"
                            "Denoise as diffuse: normal facing the camera, fully rough");
-
-            bool bypassDenoiser = config->FsrdBypassDenoiser.value_or_default();
-            if (ImGui::Checkbox("Bypass denoiser (upscale only)", &bypassDenoiser))
-                config->FsrdBypassDenoiser = bypassDenoiser;
-
-            ShowHelpMarker("Diagnostic: skip FSR Ray Regeneration and upscale the game's noisy color,\n"
-                           "to compare with the denoiser in the same frame. Not saved to the ini.");
-
-            bool showInput = config->FsrdShowDenoiserInput.value_or_default();
-            if (ImGui::Checkbox("Show denoiser input", &showInput))
-                config->FsrdShowDenoiserInput = showInput;
-
-            ShowHelpMarker("Diagnostic: shows the signals FSRD gives the denoiser, remodulated,\n"
-                           "instead of the denoised result. Noisy by design. Not saved to the ini.");
-
-            bool diagnostics = config->FsrdDiagnostics.value_or_default();
-            if (ImGui::Checkbox("Diagnostics log", &diagnostics))
-                config->FsrdDiagnostics = diagnostics;
-
-            ShowHelpMarker("Logs the inputs at a few screen points every 120 frames.\n"
-                           "Captures from the button above always log.");
-
-            bool debugView = config->FsrdDebugView.value_or_default();
-            if (ImGui::Checkbox("Debug View", &debugView))
-                config->FsrdDebugView = debugView;
-
-            ShowHelpMarker("FSR Ray Regeneration's debug panels (input signals and denoised output)");
-
-            bool roughnessOverride = config->FsrdRoughnessOverrideEnabled.value_or_default();
-            if (ImGui::Checkbox("Override Roughness", &roughnessOverride))
-                config->FsrdRoughnessOverrideEnabled = roughnessOverride;
-
-            ShowHelpMarker("Diagnostic: use a constant roughness for every surface instead of the game's");
-
-            if (roughnessOverride)
-            {
-                float roughness = config->FsrdRoughnessOverride.value_or_default();
-                if (ImGui::SliderFloat("Roughness", &roughness, 0.0f, 1.0f, "%.2f"))
-                    config->FsrdRoughnessOverride = roughness;
-            }
 
             // Filled with the denoiser's defaults once its context exists
             if (config->FsrdStabilityBias.has_value())
@@ -2947,6 +2861,80 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
             }
 
             ImGui::PopItemWidth();
+
+            if (ImGui::TreeNode("Diagnostics"))
+            {
+                // Timed capture: tags the probe lines in the log and writes a per point summary
+                auto fsrdFeature = dynamic_cast<FSRDFeatureDx12*>(currentFeature);
+
+                if (auto probe = fsrdFeature != nullptr ? fsrdFeature->Probe() : nullptr; probe != nullptr)
+                {
+                    static int captureLabel = 0;
+                    ImGui::PushItemWidth(120.0f * menuResScale);
+                    ImGui::Combo("##ProbeCaptureLabel", &captureLabel, FsrdProbe::CaptureLabels,
+                                 FsrdProbe::CaptureLabelCount);
+                    ImGui::PopItemWidth();
+                    ImGui::SameLine();
+
+                    const float remaining = probe->CaptureRemaining();
+
+                    if (probe->CapturePending())
+                    {
+                        ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)),
+                                           "Starts in %.1f s, close the menu", probe->CaptureCountdown());
+                    }
+                    else if (remaining > 0.0f)
+                    {
+                        ImGui::TextColored(toneMapColor(ImVec4(0.3f, 0.8f, 1.f, 1.f)), "Capturing #%d: %.1f s",
+                                           probe->CaptureCount(), remaining);
+                    }
+                    else if (ImGui::Button("Start capture (10 s)"))
+                    {
+                        probe->StartCapture(captureLabel);
+                    }
+
+                    ShowHelpMarker("Records the denoiser inputs at 5 screen points for 10 s\n"
+                                   "(~7 samples/s) and writes a summary per point to OptiScaler.log.\n"
+                                   "Starts 2 s after pressing: close the menu, a timer shows on screen.");
+                }
+
+                bool diagnostics = config->FsrdDiagnostics.value_or_default();
+                if (ImGui::Checkbox("Diagnostics log", &diagnostics))
+                    config->FsrdDiagnostics = diagnostics;
+
+                ShowHelpMarker("Logs the inputs at a few screen points every 120 frames.\n"
+                               "Captures always log.");
+
+                bool bypassDenoiser = config->FsrdBypassDenoiser.value_or_default();
+                if (ImGui::Checkbox("Bypass denoiser (upscale only)", &bypassDenoiser))
+                    config->FsrdBypassDenoiser = bypassDenoiser;
+
+                ShowHelpMarker("Skip FSR Ray Regeneration and upscale the game's noisy color,\n"
+                               "to compare with the denoiser in the same frame. Not saved to the ini.");
+
+                bool debugView = config->FsrdDebugView.value_or_default();
+                if (ImGui::Checkbox("Debug View", &debugView))
+                    config->FsrdDebugView = debugView;
+
+                ShowHelpMarker("FSR Ray Regeneration's debug panels (input signals and denoised output)");
+
+                bool roughnessOverride = config->FsrdRoughnessOverrideEnabled.value_or_default();
+                if (ImGui::Checkbox("Override Roughness", &roughnessOverride))
+                    config->FsrdRoughnessOverrideEnabled = roughnessOverride;
+
+                ShowHelpMarker("Use a constant roughness for every surface instead of the game's");
+
+                if (roughnessOverride)
+                {
+                    ImGui::PushItemWidth(220.0f * menuResScale);
+                    float roughness = config->FsrdRoughnessOverride.value_or_default();
+                    if (ImGui::SliderFloat("Roughness", &roughness, 0.0f, 1.0f, "%.2f"))
+                        config->FsrdRoughnessOverride = roughness;
+                    ImGui::PopItemWidth();
+                }
+
+                ImGui::TreePop();
+            }
 
             ImGui::Spacing();
             ImGui::Spacing();

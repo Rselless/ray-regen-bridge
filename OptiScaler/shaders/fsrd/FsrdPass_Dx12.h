@@ -1,5 +1,5 @@
 #pragma once
-// One compute pass of FSRDFeatureDx12 (fsrd_prepass / fsrd_compose). Same pattern as Bias_Dx12, but with a
+// One compute pass of FSRDFeatureDx12 (fsrd_prepass / fsrd_compose / fsrd_particles / fsrd_probe). Same pattern as Bias_Dx12, but with a
 // variable number of SRVs/UAVs and one constant buffer per descriptor heap, since constants are written at record
 // time and the GPU can still be reading the previous frame's.
 #include <d3d12.h>
@@ -43,9 +43,7 @@ class FsrdPass_Dx12 : public Shader_Dx12
         uint32_t SentinelMode;
 
         uint32_t CounterSlot;
-        float RestoreStrength;
-        float RestoreStride;
-        float Pad3;
+        float Pad3[3];
     };
 
   private:

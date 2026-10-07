@@ -7,7 +7,7 @@
 
 #include <shaders/fsrd/precompile/fsrd_prepass_Shader.h>
 #include <shaders/fsrd/precompile/fsrd_compose_Shader.h>
-#include <shaders/fsrd/precompile/fsrd_restore_Shader.h>
+#include <shaders/fsrd/precompile/fsrd_particles_Shader.h>
 
 // FSR Ray Regeneration API (ffx_denoiser.h 1.2.0), wrapped so it builds on the same ffx_api.h OptiScaler already
 // uses -- see ffx_denoiser_compat.h for why the real header can't be included directly. ffxApiGetResourceDX12 comes
@@ -41,7 +41,7 @@ constexpr uint32_t FlagSeparateRoughness = 0x1;
 constexpr uint32_t FlagHasSpecHitDistance = 0x2;
 constexpr uint32_t FlagDepthInverted = 0x4;
 constexpr uint32_t FlagParticleLayer = 0x8;
-constexpr uint32_t FlagParticleDeferred = 0x10;
+constexpr uint32_t FlagCountSentinels = 0x10;
 
 // Scratch format for the denoiser signals and the packed normals (FFX's preferred signal format)
 constexpr DXGI_FORMAT ScratchFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
@@ -145,7 +145,7 @@ FSRDFeatureDx12::~FSRDFeatureDx12()
 
     std::thread(
         [retired = std::move(_retired), prepass = std::move(_prepass), compose = std::move(_compose),
-         restore = std::move(_restore), probe = std::move(_probe)]() mutable
+         particles = std::move(_particlesPass), probe = std::move(_probe)]() mutable
         {
             std::this_thread::sleep_for(std::chrono::seconds(2));
 
@@ -374,7 +374,7 @@ bool FSRDFeatureDx12::CreateScratchResources()
 std::array<ID3D12Resource**, 11> FSRDFeatureDx12::ScratchResources()
 {
     return { &_diffuseIn,     &_diffuseOut,      &_specularIn,    &_specularOut,  &_linearDepth,  &_packedNormals,
-             &_motionVectors, &_sentinelCounter, &_composedColor, &_reactiveMask, &_restoredColor };
+             &_motionVectors, &_sentinelCounter, &_composedColor, &_reactiveMask, &_bypassColor };
 }
 
 void FSRDFeatureDx12::ReleaseScratchResources()
@@ -389,7 +389,7 @@ bool FSRDFeatureDx12::PrepareComposedColor(ID3D12Resource* color)
     // Same size as the game's color on purpose: FSR 4's auto exposure reads the whole texture, not just renderSize
     auto colorDesc = color->GetDesc();
 
-    if (_composedColor != nullptr && _reactiveMask != nullptr && _restoredColor != nullptr)
+    if (_composedColor != nullptr && _reactiveMask != nullptr)
     {
         auto desc = _composedColor->GetDesc();
 
@@ -400,16 +400,13 @@ bool FSRDFeatureDx12::PrepareComposedColor(ID3D12Resource* color)
     // Can still be in flight from the previous frames
     Retire(_composedColor);
     Retire(_reactiveMask);
-    Retire(_restoredColor);
 
     const auto read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
     return CreateScratchTexture(Device, (UINT) colorDesc.Width, colorDesc.Height, colorDesc.Format, read,
                                 L"FSRD_ComposedColor", &_composedColor) &&
            CreateScratchTexture(Device, (UINT) colorDesc.Width, colorDesc.Height, DXGI_FORMAT_R8_UNORM, read,
-                                L"FSRD_ReactiveMask", &_reactiveMask) &&
-           CreateScratchTexture(Device, (UINT) colorDesc.Width, colorDesc.Height, colorDesc.Format, read,
-                                L"FSRD_RestoredColor", &_restoredColor);
+                                L"FSRD_ReactiveMask", &_reactiveMask);
 }
 
 void FSRDFeatureDx12::DisableDenoiserOnFailure(const char* reason)
@@ -578,19 +575,20 @@ bool FSRDFeatureDx12::InitInternal(ID3D12GraphicsCommandList* InCommandList, NVS
     _maxRenderHeight = RenderHeight() > 0 ? RenderHeight() : DisplayHeight();
 
     _prepass = std::make_unique<FsrdPass_Dx12>("FSRD Prepass", Device, 8, 6, fsrd_prepass_cso, sizeof(fsrd_prepass_cso));
-    _compose = std::make_unique<FsrdPass_Dx12>("FSRD Compose", Device, 10, 2, fsrd_compose_cso, sizeof(fsrd_compose_cso));
-    _restore = std::make_unique<FsrdPass_Dx12>("FSRD Restore", Device, 4, 1, fsrd_restore_cso, sizeof(fsrd_restore_cso));
+    _compose = std::make_unique<FsrdPass_Dx12>("FSRD Compose", Device, 9, 2, fsrd_compose_cso, sizeof(fsrd_compose_cso));
+    _particlesPass = std::make_unique<FsrdPass_Dx12>("FSRD Particles", Device, 2, 1, fsrd_particles_cso,
+                                                     sizeof(fsrd_particles_cso));
     // Diagnostics only, the denoiser works without it
     _probe = std::make_unique<FsrdProbe>(Device);
 
-    if (!_prepass->CanRender() || !_compose->CanRender() || !_restore->CanRender() || !CreateScratchResources() ||
+    if (!_prepass->CanRender() || !_compose->CanRender() || !_particlesPass->CanRender() || !CreateScratchResources() ||
         !CreateDenoiserContext())
     {
         LOG_ERROR("FSR Ray Regeneration init failed, only upscaling");
         ReleaseScratchResources();
         _prepass.reset();
         _compose.reset();
-        _restore.reset();
+        _particlesPass.reset();
         _probe.reset();
         _denoiserDisabled = true;
     }
@@ -740,9 +738,9 @@ FsrdPass_Dx12::Constants FSRDFeatureDx12::BuildConstants(const FrameInputs& in, 
     _sentinelSlot = _sentinelFrame++ % 2;
     constants.CounterSlot = _sentinelSlot;
 
-    constants.RestoreStrength = std::clamp(config->FsrdLowFreqRestore.value_or_default(), 0.0f, 1.0f);
-    // 4 taps each side, so the stride is a quarter of the radius
-    constants.RestoreStride = std::max(config->FsrdLowFreqRadius.value_or_default() / 4.0f, 1.0f);
+    // The sentinel count (atomics in the prepass) is only for the probe log
+    if (_probe != nullptr && _probe->Sampling())
+        constants.Flags |= FlagCountSentinels;
 
     return constants;
 }
@@ -880,7 +878,7 @@ bool FSRDFeatureDx12::RunDenoiser(ID3D12GraphicsCommandList* InCommandList, NVSD
 }
 
 bool FSRDFeatureDx12::RunCompose(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters,
-                                 const FrameInputs& in, const FsrdPass_Dx12::Constants& constants, bool restoreOn)
+                                 const FrameInputs& in, const FsrdPass_Dx12::Constants& constants)
 {
     const auto read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     const auto write = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
@@ -891,58 +889,23 @@ bool FSRDFeatureDx12::RunCompose(ID3D12GraphicsCommandList* InCommandList, NVSDK
                               { _reactiveMask, read, write } });
 
     auto gameReactive = GetResource(InParameters, NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_Mask);
-
-    // Diagnostic: remodulate the denoiser's inputs instead of its outputs, to see what it receives
-    const bool showInput = Config::Instance()->FsrdShowDenoiserInput.value_or_default();
-
-    if (showInput != _wasShowingInput)
-    {
-        LOG_INFO("Show denoiser input: {}", showInput);
-        _wasShowingInput = showInput;
-    }
-
-    // With the low frequency restore on, its residual (game color - composed) must not see the particles, so
-    // compose only marks them in the reactive mask and the restore pass puts them over
-    auto composeConstants = constants;
-
-    if (restoreOn && in.particles != nullptr)
-        composeConstants.Flags |= FlagParticleDeferred;
-
     auto composedDesc = _composedColor->GetDesc();
 
     const bool ok = _compose->Dispatch(InCommandList,
-                                       { in.color, in.diffuseAlbedo, in.specularAlbedo, in.depth,
-                                         showInput ? _diffuseIn : _diffuseOut, showInput ? _specularIn : _specularOut,
-                                         gameReactive, _packedNormals, in.normals, in.particles },
-                                       { _composedColor, _reactiveMask }, composeConstants, (UINT) composedDesc.Width,
+                                       { in.color, in.diffuseAlbedo, in.specularAlbedo, in.depth, _diffuseOut,
+                                         _specularOut, gameReactive, _packedNormals, in.particles },
+                                       { _composedColor, _reactiveMask }, constants, (UINT) composedDesc.Width,
                                        composedDesc.Height);
 
-    // With the restore on (and compose done), its output goes to UAV in the same batch
     Barriers(InCommandList, { { _diffuseOut, read, write },
                               { _specularOut, read, write },
                               { _composedColor, write, read },
-                              { _reactiveMask, write, read },
-                              { (restoreOn && ok) ? _restoredColor : nullptr, read, write } });
+                              { _reactiveMask, write, read } });
 
     if (!ok)
         DisableDenoiserOnFailure("FSRD compose dispatch failed");
 
     return ok;
-}
-
-ID3D12Resource* FSRDFeatureDx12::RunRestore(ID3D12GraphicsCommandList* InCommandList, const FrameInputs& in,
-                                            const FsrdPass_Dx12::Constants& constants)
-{
-    // _restoredColor is already in UNORDERED_ACCESS (RunCompose)
-    auto composedDesc = _composedColor->GetDesc();
-
-    const bool ok = _restore->Dispatch(InCommandList, { in.color, _composedColor, _linearDepth, in.particles },
-                                       { _restoredColor }, constants, (UINT) composedDesc.Width, composedDesc.Height);
-
-    Barriers(InCommandList,
-             { { _restoredColor, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE } });
-
-    return ok ? _restoredColor : _composedColor;
 }
 
 void FSRDFeatureDx12::RunProbe(ID3D12GraphicsCommandList* InCommandList, const FrameInputs& in,
@@ -983,15 +946,11 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
     }
 
     // 3. Compose: denoised signals * albedo (+ particle layer) -> composed color and reactive mask
-    const bool restoreOn = constants.RestoreStrength > 0.0f;
-
-    if (!RunCompose(InCommandList, InParameters, in, constants, restoreOn))
+    if (!RunCompose(InCommandList, InParameters, in, constants))
         return nullptr;
 
     RunProbe(InCommandList, in, constants);
-
-    // 4. Optional low frequency restore, then the particles go over
-    return restoreOn ? RunRestore(InCommandList, in, constants) : _composedColor;
+    return _composedColor;
 }
 
 ID3D12Resource* FSRDFeatureDx12::GetParticleLayer(NVSDK_NGX_Parameter* InParameters, ID3D12Resource* color)
@@ -1028,7 +987,7 @@ ID3D12Resource* FSRDFeatureDx12::GetParticleLayer(NVSDK_NGX_Parameter* InParamet
 ID3D12Resource* FSRDFeatureDx12::BypassWithParticles(ID3D12GraphicsCommandList* InCommandList,
                                                      NVSDK_NGX_Parameter* InParameters)
 {
-    if (_restore == nullptr || !_restore->CanRender() || _restoredColor == nullptr)
+    if (_particlesPass == nullptr || !_particlesPass->CanRender())
         return nullptr;
 
     auto color = GetResource(InParameters, NVSDK_NGX_Parameter_Color);
@@ -1043,26 +1002,37 @@ ID3D12Resource* FSRDFeatureDx12::BypassWithParticles(ID3D12GraphicsCommandList* 
     if (renderWidth == 0 || renderHeight == 0)
         return nullptr;
 
-    // The restore pass with strength 0 only puts the particle layer over its Composed input
-    FsrdPass_Dx12::Constants constants {};
-    constants.RenderWidth = std::min(renderWidth, _maxRenderWidth);
-    constants.RenderHeight = std::min(renderHeight, _maxRenderHeight);
-    constants.Flags = FlagParticleLayer;
-    constants.RestoreStrength = 0.0f;
-    constants.RestoreStride = 1.0f;
-
     const auto read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     const auto write = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    auto outDesc = _restoredColor->GetDesc();
+    auto colorDesc = color->GetDesc();
 
-    Barriers(InCommandList, { { _restoredColor, read, write } });
+    // Only created once the bypass is used, same size/format as the game's color
+    if (_bypassColor != nullptr)
+    {
+        auto desc = _bypassColor->GetDesc();
 
-    const bool ok = _restore->Dispatch(InCommandList, { color, color, nullptr, particles }, { _restoredColor },
-                                       constants, (UINT) outDesc.Width, outDesc.Height);
+        if (desc.Width != colorDesc.Width || desc.Height != colorDesc.Height || desc.Format != colorDesc.Format)
+            Retire(_bypassColor);
+    }
 
-    Barriers(InCommandList, { { _restoredColor, write, read } });
+    if (_bypassColor == nullptr && !CreateScratchTexture(Device, (UINT) colorDesc.Width, colorDesc.Height,
+                                                         colorDesc.Format, read, L"FSRD_BypassColor", &_bypassColor))
+    {
+        return nullptr;
+    }
 
-    return ok ? _restoredColor : nullptr;
+    FsrdPass_Dx12::Constants constants {};
+    constants.RenderWidth = std::min(renderWidth, (unsigned int) colorDesc.Width);
+    constants.RenderHeight = std::min(renderHeight, (unsigned int) colorDesc.Height);
+
+    Barriers(InCommandList, { { _bypassColor, read, write } });
+
+    const bool ok = _particlesPass->Dispatch(InCommandList, { color, particles }, { _bypassColor }, constants,
+                                             (UINT) colorDesc.Width, colorDesc.Height);
+
+    Barriers(InCommandList, { { _bypassColor, write, read } });
+
+    return ok ? _bypassColor : nullptr;
 }
 
 bool FSRDFeatureDx12::EvaluateInternal(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters)

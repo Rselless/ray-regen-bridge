@@ -41,9 +41,7 @@ cbuffer Params : register(b0)
     uint SentinelMode;        // SENTINEL_PASSTHROUGH or SENTINEL_DIFFUSE
 
     uint CounterSlot;         // prepass: SentinelCounter texel counted this frame, the other one is cleared
-    float RestoreStrength;    // restore: share of the blurred residual (game - composed) added back, 0 = off
-    float RestoreStride;      // restore: pixels between blur taps
-    float Pad3;
+    float3 Pad3;
 };
 
 #define SENTINEL_PASSTHROUGH 0
@@ -57,10 +55,10 @@ cbuffer Params : register(b0)
 #define FLAG_HAS_SPEC_HIT_DISTANCE 0x2
 #define FLAG_DEPTH_INVERTED 0x4
 #define FLAG_PARTICLE_LAYER 0x8     // particle layer (premultiplied, alpha = coverage) goes over the result
-#define FLAG_PARTICLE_DEFERRED 0x10 // compose: reactive mask only, the restore pass puts the particles over
+#define FLAG_COUNT_SENTINELS 0x10   // prepass: count sentinel texels (only while the probe samples)
 
 #define MATERIAL_SURFACE 0.0f  // packed normals alpha: material type the denoiser doesn't filter across
-#define MATERIAL_SENTINEL 1.0f // sentinel texels denoised as diffuse, kept apart from real surfaces
+#define MATERIAL_SENTINEL 1.0f // sentinel texels, kept apart from real surfaces; compose reads it back
 
 static const float NoHitDistance = 10000.0f; // game's specular hit distance when the ray missed (ReSTIR DI)
 static const float MaxHitDistance = 65504.0f;

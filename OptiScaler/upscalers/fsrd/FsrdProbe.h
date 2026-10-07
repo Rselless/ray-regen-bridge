@@ -62,6 +62,9 @@ class FsrdProbe
     // True for a few seconds after a capture ends
     bool CaptureJustDone() const { return NowNs() < _captureDoneUntilNs.load(); }
 
+    // True while samples are taken or about to be (the prepass only counts sentinel texels then)
+    bool Sampling() const;
+
   private:
     struct Stats
     {

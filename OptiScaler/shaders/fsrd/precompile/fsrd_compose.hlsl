@@ -15,9 +15,8 @@ Texture2D<float> Depth : register(t3);
 Texture2D<float4> DiffuseDenoised : register(t4);
 Texture2D<float4> SpecularDenoised : register(t5);
 Texture2D<float> GameReactive : register(t6);    // DLSS.Input.Bias.Current.Color.Mask, null reads 0
-Texture2D<float4> PackedNormals : register(t7);  // prepass output, roughness in B
-Texture2D<float4> GameNormals : register(t8);    // game's GBuffer.Normals, only for the sentinel test
-Texture2D<float4> Particles : register(t9); // DLSSD.ColorBeforeParticles: steam/smoke/glows over black, alpha is
+Texture2D<float4> PackedNormals : register(t7);  // prepass output, roughness in B, material in A
+Texture2D<float4> Particles : register(t8); // DLSSD.ColorBeforeParticles: steam/smoke/glows over black, alpha is
                                             // coverage, used with FLAG_PARTICLE_LAYER
 
 RWTexture2D<float4> Output : register(u0);
@@ -29,11 +28,7 @@ float3 OverParticles(float3 c, int3 p, inout float reactive)
     if ((Flags & FLAG_PARTICLE_LAYER) == 0)
         return c;
 
-    const float3 over = OverParticleLayer(c, Particles.Load(p), reactive);
-
-    // With the low frequency restore on, its residual (game color - composed) must not see the particles, which
-    // the game color doesn't have; the restore pass puts them over afterwards
-    return (Flags & FLAG_PARTICLE_DEFERRED) ? c : over;
+    return OverParticleLayer(c, Particles.Load(p), reactive);
 }
 
 [numthreads(16, 16, 1)]
@@ -60,7 +55,10 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
     const float3 diffuseAlbedo = DiffuseAlbedo.Load(p).rgb;
     const float3 specularAlbedo = SpecularAlbedo.Load(p).rgb;
 
-    if (IsSentinel(GameNormals.Load(p), diffuseAlbedo, specularAlbedo))
+    const float4 packedNormals = PackedNormals.Load(p);
+
+    // The prepass marked sentinel texels in the material channel
+    if (packedNormals.w > 0.5f * MATERIAL_SENTINEL)
     {
         // Same choice as the prepass: game color, or the denoised diffuse signal (white albedo, no remodulation)
         const float3 denoised = DiffuseDenoised.Load(p).rgb;
@@ -93,7 +91,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
     }
 
     float specularShare = saturate(dot(specular, LumaWeights) / max(dot(composed, LumaWeights), 1e-4f));
-    float smoothness = 1.0f - smoothstep(0.1f, 0.5f, PackedNormals.Load(p).z);
+    float smoothness = 1.0f - smoothstep(0.1f, 0.5f, packedNormals.z);
 
     float reactive = max(gameReactive, saturate(ReflectionReactive * specularShare * smoothness));
     Output[DTid.xy] = float4(OverParticles(composed, p, reactive), color.a);

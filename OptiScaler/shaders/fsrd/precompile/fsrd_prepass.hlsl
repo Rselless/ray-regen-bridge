@@ -61,14 +61,17 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
 
     const bool sentinel = IsSentinel(n, diffuseAlbedo, specularAlbedo);
 
-    // Count sentinel texels for the log, one atomic per wave
-    if (all(DTid.xy == 0))
-        SentinelCounter[uint2(1 - CounterSlot, 0)] = 0;
+    // Count sentinel texels for the probe log, one atomic per wave
+    if (Flags & FLAG_COUNT_SENTINELS)
+    {
+        if (all(DTid.xy == 0))
+            SentinelCounter[uint2(1 - CounterSlot, 0)] = 0;
 
-    const uint waveSentinels = WaveActiveCountBits(sentinel);
+        const uint waveSentinels = WaveActiveCountBits(sentinel);
 
-    if (WaveIsFirstLane() && waveSentinels > 0)
-        InterlockedAdd(SentinelCounter[uint2(CounterSlot, 0)], waveSentinels);
+        if (WaveIsFirstLane() && waveSentinels > 0)
+            InterlockedAdd(SentinelCounter[uint2(CounterSlot, 0)], waveSentinels);
+    }
 
     // World space normal, roughness in normals.w when packed (DLSS.Roughness.Mode 1)
     float3 normal = n.xyz;
@@ -88,7 +91,8 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
 
     float viewZ = LinearDepth(hwDepth);
 
-    const float material = (sentinel && SentinelMode == SENTINEL_DIFFUSE) ? MATERIAL_SENTINEL : MATERIAL_SURFACE;
+    // Passthrough sentinels are inactive for the denoiser, so there the material only tells compose what they are
+    const float material = sentinel ? MATERIAL_SENTINEL : MATERIAL_SURFACE;
     PackedNormals[DTid.xy] = float4(NormalToOctahedronUv(normal), saturate(roughness), material);
     LinearDepthOut[DTid.xy] = viewZ;
     MotionVectorsOut[DTid.xy] = BuildMotionVector(DTid.xy, viewZ, IsSky(hwDepth) || viewZ >= SkyDepth);

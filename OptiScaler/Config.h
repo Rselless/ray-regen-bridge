@@ -305,17 +305,12 @@ class Config
     // Steam/smoke layer the game only sends in DLSSD.ColorBeforeParticles: 0 = off, 1 = over the denoised color,
     // 2 = debug, upscale that texture as is
     CustomOptional<int> FsrdParticleLayer { 1 };
-    // Low frequency restore of what the denoiser removed (fog, haze), 0 = off
-    CustomOptional<float> FsrdLowFreqRestore { 0.0f };
-    CustomOptional<float> FsrdLowFreqRadius { 24.0f };
     // Periodic probe log of the inputs (hit distance, depth, normals, albedos) outside captures
     CustomOptional<bool> FsrdDiagnostics { false };
     // Diagnostic, menu only: replace the game's roughness with a constant
     CustomOptional<bool> FsrdRoughnessOverrideEnabled { false };
     // Diagnostic, menu only: skip the denoiser and upscale the game's color, for A/B in the same frame
     CustomOptional<bool> FsrdBypassDenoiser { false };
-    // Menu only: compose the prepass signals instead of the denoised ones (what the denoiser gets)
-    CustomOptional<bool> FsrdShowDenoiserInput { false };
     CustomOptional<float> FsrdRoughnessOverride { 0.2f };
     // Denoiser tuning, unset means the denoiser's own default (filled in as a volatile value once it's queried)
     CustomOptional<float, NoDefault> FsrdStabilityBias;

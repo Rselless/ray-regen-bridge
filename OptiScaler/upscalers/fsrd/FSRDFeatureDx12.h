@@ -8,10 +8,9 @@
 //   2. Denoise: FSR Ray Regeneration (amd_fidelityfx_denoiser_dx12.dll, ffx_denoiser.h 1.2.0), scratch in/out only.
 //   3. Compose (fsrd_compose.hlsl): remodulates the denoised signals into a scratch color texture and puts the
 //      game's particle layer (DLSSD.ColorBeforeParticles) over it.
-//   4. Optional low frequency restore (fsrd_restore.hlsl).
-//   5. Upscale: the regular FFX upscaler path (FFXFeatureDx12::EvaluateInternal) with Color pointed at the composed
+//   4. Upscale: the regular FFX upscaler path (FFXFeatureDx12::EvaluateInternal) with Color pointed at the composed
 //      texture, writing the game's Output. If any step fails the game's own color is upscaled instead.
-// No game resource is ever written except Output. [FSRD] EnableDenoiser=false skips steps 1-4.
+// No game resource is ever written except Output. [FSRD] EnableDenoiser=false skips steps 1-3.
 //
 // Resource keys come from NVIDIA's public nvsdk_ngx_defs_dlssd.h / nvsdk_ngx_helpers_dlssd_d3d.h.
 
@@ -48,7 +47,6 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     int _lastSentinelMode = -1;
     int _lastParticleLayer = -1;
     bool _wasBypassed = false;
-    bool _wasShowingInput = false;
 
     // Previous frame's WorldToViewMatrix, for cameraPositionDelta and the MV depth delta
     bool _hasPrevView = false;
@@ -68,14 +66,14 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     ID3D12Resource* _motionVectors = nullptr;   // game MVs in UV + linear depth delta in B
     ID3D12Resource* _composedColor = nullptr;   // same size/format as the game's color, recreated when it changes
     ID3D12Resource* _reactiveMask = nullptr;    // R8, same size as the composed color, given to FSR as FSR.reactive
-    ID3D12Resource* _restoredColor = nullptr;   // restore / bypass with particles output, same size/format
+    ID3D12Resource* _bypassColor = nullptr;     // bypass: game color + particle layer, created when first used
     ID3D12Resource* _sentinelCounter = nullptr; // 2x1 R32_UINT, sentinel texels per frame, ping-ponged
     uint32_t _sentinelFrame = 0;
     uint32_t _sentinelSlot = 0; // SentinelCounter texel the current frame counts into
 
     std::unique_ptr<FsrdPass_Dx12> _prepass;
     std::unique_ptr<FsrdPass_Dx12> _compose;
-    std::unique_ptr<FsrdPass_Dx12> _restore;
+    std::unique_ptr<FsrdPass_Dx12> _particlesPass; // particle layer over the game's color (bypass)
     std::unique_ptr<FsrdProbe> _probe; // diagnostics, null when the denoiser is off
 
     // Replaced resources and denoiser contexts, released RetireFrames evaluations later (the GPU can still be
@@ -141,9 +139,7 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     bool RunDenoiser(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters,
                      const FrameInputs& in);
     bool RunCompose(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters,
-                    const FrameInputs& in, const FsrdPass_Dx12::Constants& constants, bool restoreOn);
-    ID3D12Resource* RunRestore(ID3D12GraphicsCommandList* InCommandList, const FrameInputs& in,
-                               const FsrdPass_Dx12::Constants& constants);
+                    const FrameInputs& in, const FsrdPass_Dx12::Constants& constants);
     void RunProbe(ID3D12GraphicsCommandList* InCommandList, const FrameInputs& in,
                   const FsrdPass_Dx12::Constants& constants);
 

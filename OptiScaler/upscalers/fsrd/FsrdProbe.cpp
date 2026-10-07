@@ -36,6 +36,11 @@ FsrdProbe::~FsrdProbe()
     SAFE_RELEASE(_texels);
 }
 
+bool FsrdProbe::Sampling() const
+{
+    return _captureActive || CapturePending() || Config::Instance()->FsrdDiagnostics.value_or_default();
+}
+
 bool FsrdProbe::CreateResources()
 {
     auto desc = CD3DX12_RESOURCE_DESC::Buffer(ProbeSlotSize * 2);
