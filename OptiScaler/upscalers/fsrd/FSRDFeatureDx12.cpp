@@ -8,12 +8,15 @@
 #include <shaders/fsrd/precompile/fsrd_prepass_Shader.h>
 #include <shaders/fsrd/precompile/fsrd_compose_Shader.h>
 #include <shaders/fsrd/precompile/fsrd_restore_Shader.h>
-#include <shaders/fsrd/precompile/fsrd_probe_Shader.h>
 
 // FSR Ray Regeneration API (ffx_denoiser.h 1.2.0), wrapped so it builds on the same ffx_api.h OptiScaler already
 // uses -- see ffx_denoiser_compat.h for why the real header can't be included directly. ffxApiGetResourceDX12 comes
 // from <dx12/ffx_api_dx12.h>, already included through FfxApi_Proxy.h.
 #include "ffx_denoiser_compat.h"
+#include "FsrdUtil.h"
+
+using Fsrd::Barriers;
+using Fsrd::CreateScratchTexture;
 
 // DLSS Ray Reconstruction NGX keys, from NVIDIA's public nvsdk_ngx_defs_dlssd.h
 // (NGX_D3D12_EVALUATE_DLSSD_EXT in nvsdk_ngx_helpers_dlssd_d3d.h sets these).
@@ -47,47 +50,11 @@ constexpr DXGI_FORMAT ScratchFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
 constexpr float SkyDepth = 60000.0f;
 constexpr float SkyDepthBound = 50000.0f;
 
-// Input probe: screen points (fractions of the render size, same as fsrd_probe.hlsl), RGBA32F texels per point
-// written by that shader, frames between rounds
-constexpr float ProbePoints[][2] = { { 0.5f, 0.5f }, { 0.5f, 0.8f }, { 0.3f, 0.7f }, { 0.7f, 0.7f }, { 0.5f, 0.95f } };
-constexpr UINT ProbePointCount = 5;
-constexpr UINT ProbeTexelsPerPoint = 4; // (hit, depth, roughness, material), game normals, diffuse, specular albedo
-constexpr DXGI_FORMAT ProbeTexelFormat = DXGI_FORMAT_R32G32B32A32_FLOAT;
-constexpr UINT ProbeRowPitch = D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT; // 512 >= 20 texels * 16 bytes
-// Per readback slot: the probe texels row, then one texel with the frame's sentinel count
-constexpr UINT ProbeCounterOffset = ProbeRowPitch;
-constexpr UINT ProbeSlotSize = ProbeCounterOffset + D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT;
-constexpr uint32_t ProbeInterval = 120;
-constexpr uint32_t ProbeCaptureInterval = 8; // ~7 samples/s at 60 fps, still several frames for the GPU copy
-
 // Disable the denoiser for the session after this many failures, upscaling keeps running
 constexpr int MaxDenoiserFailures = 3;
 
 // Frames a replaced resource or denoiser context is kept alive, the GPU can still be running work that uses it
 constexpr uint32_t RetireFrames = 8;
-
-struct BarrierDesc
-{
-    ID3D12Resource* resource;
-    D3D12_RESOURCE_STATES before;
-    D3D12_RESOURCE_STATES after;
-};
-
-// One ResourceBarrier call for a group of transitions, null resources are skipped
-static void Barriers(ID3D12GraphicsCommandList* cmdList, std::initializer_list<BarrierDesc> transitions)
-{
-    D3D12_RESOURCE_BARRIER barriers[16];
-    UINT count = 0;
-
-    for (const auto& t : transitions)
-    {
-        if (t.resource != nullptr && t.before != t.after && count < std::size(barriers))
-            barriers[count++] = CD3DX12_RESOURCE_BARRIER::Transition(t.resource, t.before, t.after);
-    }
-
-    if (count > 0)
-        cmdList->ResourceBarrier(count, barriers);
-}
 
 static ID3D12Resource* GetResource(NVSDK_NGX_Parameter* InParameters, const char* key)
 {
@@ -97,26 +64,6 @@ static ID3D12Resource* GetResource(NVSDK_NGX_Parameter* InParameters, const char
         InParameters->Get(key, (void**) &resource);
 
     return resource;
-}
-
-static bool CreateScratchTexture(ID3D12Device* device, UINT width, UINT height, DXGI_FORMAT format,
-                                 D3D12_RESOURCE_STATES initialState, const wchar_t* name, ID3D12Resource** target)
-{
-    auto desc =
-        CD3DX12_RESOURCE_DESC::Tex2D(format, width, height, 1, 1, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-    auto heapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
-
-    auto hr = device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &desc, initialState, nullptr,
-                                              IID_PPV_ARGS(target));
-
-    if (FAILED(hr))
-    {
-        LOG_ERROR("Failed to create {}, hr: {:X}", wstring_to_string(name), (UINT) hr);
-        return false;
-    }
-
-    (*target)->SetName(name);
-    return true;
 }
 
 // Row-vector rigid view matrix (rotation rows 0-2, translation row 3) -> camera world position
@@ -198,7 +145,7 @@ FSRDFeatureDx12::~FSRDFeatureDx12()
 
     std::thread(
         [retired = std::move(_retired), prepass = std::move(_prepass), compose = std::move(_compose),
-         restore = std::move(_restore), probe = std::move(_probePass)]() mutable
+         restore = std::move(_restore), probe = std::move(_probe)]() mutable
         {
             std::this_thread::sleep_for(std::chrono::seconds(2));
 
@@ -424,11 +371,10 @@ bool FSRDFeatureDx12::CreateScratchResources()
                                                                 L"FSRD_SentinelCounter", &_sentinelCounter));
 }
 
-std::array<ID3D12Resource**, 13> FSRDFeatureDx12::ScratchResources()
+std::array<ID3D12Resource**, 11> FSRDFeatureDx12::ScratchResources()
 {
-    return { &_diffuseIn,      &_diffuseOut,    &_specularIn,   &_specularOut,    &_linearDepth,
-             &_packedNormals,  &_motionVectors, &_sentinelCounter, &_composedColor, &_reactiveMask,
-             &_restoredColor,  &_probeReadback, &_probeTexels };
+    return { &_diffuseIn,     &_diffuseOut,      &_specularIn,    &_specularOut,  &_linearDepth,  &_packedNormals,
+             &_motionVectors, &_sentinelCounter, &_composedColor, &_reactiveMask, &_restoredColor };
 }
 
 void FSRDFeatureDx12::ReleaseScratchResources()
@@ -511,262 +457,6 @@ void FSRDFeatureDx12::ApplyTuning()
 
         _appliedTuning[i] = value;
         _tuningSent[i] = true;
-    }
-}
-
-void FSRDFeatureDx12::FinishProbeCapture()
-{
-    const int id = _captureId.load();
-    const char* label = ProbeCaptureLabels[_captureLabel];
-
-    LOG_INFO("=== Probe capture #{} '{}' summary ===", id, label);
-
-    for (int i = 0; i < ProbePointCount; i++)
-    {
-        const auto& st = _captureStats[i];
-
-        if (st.count == 0)
-        {
-            LOG_INFO("[cap #{} {}] point ({:.2f}, {:.2f}): no samples", id, label, ProbePoints[i][0], ProbePoints[i][1]);
-            continue;
-        }
-
-        const float c = (float) st.count;
-        LOG_INFO("[cap #{} {}] point ({:.2f}, {:.2f}) {} samples: hit distance {:.3f}..{:.3f}, depth {:.3f}..{:.3f}, "
-                 "roughness used {:.3f}..{:.3f}, game normal w {:.3f}..{:.3f}, mean normal world ({:.3f}, {:.3f}, "
-                 "{:.3f}) view ({:.3f}, {:.3f}, {:.3f})",
-                 id, label, ProbePoints[i][0], ProbePoints[i][1], st.count, st.hitMin, st.hitMax, st.depthMin,
-                 st.depthMax, st.roughMin, st.roughMax, st.alphaMin, st.alphaMax, st.normalSum[0] / c,
-                 st.normalSum[1] / c, st.normalSum[2] / c, st.viewNormalSum[0] / c, st.viewNormalSum[1] / c,
-                 st.viewNormalSum[2] / c);
-    }
-
-    if (_captureSentinelCount > 0)
-    {
-        LOG_INFO("[cap #{} {}] sentinel pixels: min {:.2f}%, avg {:.2f}%, max {:.2f}% over {} samples", id, label,
-                 _captureSentinelMin, _captureSentinelSum / _captureSentinelCount, _captureSentinelMax,
-                 _captureSentinelCount);
-    }
-
-    LOG_INFO("=== Probe capture #{} '{}' end ===", id, label);
-
-    _captureActive = false;
-    _captureEndNs.store(0);
-    _captureDoneUntilNs.store(NowNs() + SecondsToNs(ProbeCaptureDoneSeconds));
-}
-
-void FSRDFeatureDx12::ProbeInputs(ID3D12GraphicsCommandList* cmdList, const FsrdPass_Dx12::Constants& constants,
-                                  ID3D12Resource* specularHitDistance, ID3D12Resource* normals,
-                                  ID3D12Resource* diffuseAlbedo, ID3D12Resource* specularAlbedo,
-                                  const float view[4][4])
-{
-    const int64_t nowNs = NowNs();
-
-    // A requested capture starts after the menu delay
-    int request = -1;
-
-    if (_captureRequest.load() >= 0 && nowNs >= _captureStartNs.load())
-        request = _captureRequest.exchange(-1);
-
-    if (request >= 0 && request < ProbeCaptureLabelCount)
-    {
-        if (_captureActive)
-            FinishProbeCapture();
-
-        _captureLabel = request;
-        _captureId.fetch_add(1);
-
-        for (auto& st : _captureStats)
-            st = ProbeStats {};
-
-        _captureSentinelMin = 1e30f;
-        _captureSentinelMax = -1e30f;
-        _captureSentinelSum = 0.0f;
-        _captureSentinelCount = 0;
-
-        _captureActive = true;
-        _probeFrame = 0;
-        _captureDoneUntilNs.store(0);
-        _captureEndNs.store(nowNs + SecondsToNs(ProbeCaptureSeconds));
-
-        LOG_INFO("=== Probe capture #{} '{}' start ({} s) ===", _captureId.load(), ProbeCaptureLabels[_captureLabel],
-                 ProbeCaptureSeconds);
-    }
-
-    if (_captureActive && nowNs >= _captureEndNs.load())
-        FinishProbeCapture();
-
-    // Outside a capture the periodic probe log only runs with the Diagnostics option
-    if (!_captureActive && !Config::Instance()->FsrdDiagnostics.value_or_default())
-    {
-        _probeSlotWritten[0] = _probeSlotWritten[1] = false;
-        _probeFrame = 0;
-        return;
-    }
-
-    const uint32_t interval = _captureActive ? ProbeCaptureInterval : ProbeInterval;
-
-    if (++_probeFrame % interval != 0 || _probePass == nullptr || !_probePass->CanRender())
-        return;
-
-    const int slot = _probeRound++ % 2;
-    const int otherSlot = 1 - slot;
-
-    if (_probeReadback == nullptr || _probeTexels == nullptr)
-    {
-        auto desc = CD3DX12_RESOURCE_DESC::Buffer(ProbeSlotSize * 2);
-        auto heapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_READBACK);
-
-        if (FAILED(Device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &desc,
-                                                   D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-                                                   IID_PPV_ARGS(&_probeReadback))) ||
-            !CreateScratchTexture(Device, ProbePointCount * ProbeTexelsPerPoint, 1, ProbeTexelFormat,
-                                  D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"FSRD_ProbeTexels", &_probeTexels))
-        {
-            LOG_ERROR("Can't create the probe resources");
-            SAFE_RELEASE(_probeReadback);
-            SAFE_RELEASE(_probeTexels);
-            _probeFrame = 0x7FFFFFFF; // don't try again for a long time
-            return;
-        }
-    }
-
-    // The other slot was copied a full interval ago, so that frame's GPU work is done
-    if (_probeSlotWritten[otherSlot])
-    {
-        D3D12_RANGE range { (SIZE_T) otherSlot * ProbeSlotSize, (SIZE_T) (otherSlot + 1) * ProbeSlotSize };
-        uint8_t* data = nullptr;
-
-        if (SUCCEEDED(_probeReadback->Map(0, &range, (void**) &data)))
-        {
-            LogProbeSlot(data + otherSlot * ProbeSlotSize, otherSlot);
-
-            D3D12_RANGE noWrite { 0, 0 };
-            _probeReadback->Unmap(0, &noWrite);
-        }
-    }
-
-    // This round: the probe shader reads the inputs at the points into _probeTexels (game resources only through
-    // SRVs, their state is never changed), then _probeTexels and this frame's sentinel count go to the readback
-    if (!_probePass->Dispatch(cmdList,
-                              { specularHitDistance, normals, diffuseAlbedo, specularAlbedo, _linearDepth,
-                                _packedNormals },
-                              { _probeTexels }, constants, ProbePointCount, 1))
-    {
-        return;
-    }
-
-    const auto uav = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    const auto copy = D3D12_RESOURCE_STATE_COPY_SOURCE;
-
-    Barriers(cmdList, { { _probeTexels, uav, copy }, { _sentinelCounter, uav, copy } });
-
-    D3D12_TEXTURE_COPY_LOCATION dst {};
-    dst.pResource = _probeReadback;
-    dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-    dst.PlacedFootprint.Offset = slot * ProbeSlotSize;
-    dst.PlacedFootprint.Footprint = { ProbeTexelFormat, ProbePointCount * ProbeTexelsPerPoint, 1, 1,
-                                      ProbeRowPitch };
-
-    D3D12_TEXTURE_COPY_LOCATION src {};
-    src.pResource = _probeTexels;
-    src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-    src.SubresourceIndex = 0;
-
-    cmdList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
-
-    dst.PlacedFootprint.Offset = slot * ProbeSlotSize + ProbeCounterOffset;
-    dst.PlacedFootprint.Footprint = { DXGI_FORMAT_R32_UINT, 1, 1, 1, D3D12_TEXTURE_DATA_PITCH_ALIGNMENT };
-    src.pResource = _sentinelCounter;
-
-    D3D12_BOX box { _probeCounterSlot, 0, 0, _probeCounterSlot + 1, 1, 1 };
-    cmdList->CopyTextureRegion(&dst, 0, 0, 0, &src, &box);
-
-    Barriers(cmdList, { { _probeTexels, copy, uav }, { _sentinelCounter, copy, uav } });
-
-    _probePixels[slot] = constants.RenderWidth * constants.RenderHeight;
-    _probeSlotWritten[slot] = true;
-    memcpy(_probeView[slot], view, sizeof(_probeView[slot]));
-    _probeSlotCapture[slot] = _captureActive ? _captureId.load() : 0;
-}
-
-void FSRDFeatureDx12::LogProbeSlot(const uint8_t* data, int slot)
-{
-    // Only data copied during the running capture counts for its summary and gets its tag
-    const int slotCapture = _probeSlotCapture[slot];
-    const bool inCapture = _captureActive && slotCapture == _captureId.load();
-    const std::string tag = inCapture ? std::format("[cap #{} {}] ", slotCapture, ProbeCaptureLabels[_captureLabel]) : "";
-
-    // Camera axes in world space are the columns of the row-vector view rotation
-    const auto& v = _probeView[slot];
-    LOG_INFO("{}Probe camera: right ({:.3f}, {:.3f}, {:.3f}), up ({:.3f}, {:.3f}, {:.3f}), "
-             "forward ({:.3f}, {:.3f}, {:.3f})",
-             tag, v[0][0], v[1][0], v[2][0], v[0][1], v[1][1], v[2][1], v[0][2], v[1][2], v[2][2]);
-
-    for (int i = 0; i < ProbePointCount; i++)
-    {
-        // Layout written by fsrd_probe.hlsl: (hit, depth, roughness, material), game normals, diffuse, specular
-        float t[ProbeTexelsPerPoint][4] {};
-        memcpy(t, data + i * ProbeTexelsPerPoint * sizeof(t[0]), sizeof(t));
-
-        const float hitDistance = t[0][0], linearDepth = t[0][1], rough = t[0][2];
-        const float* n = t[1];
-        const float* diffuse = t[2];
-        const float* specular = t[3];
-
-        LOG_INFO("{}Probe ({:.2f}, {:.2f}): spec hit distance: {}, linear depth: {:.3f}, roughness used: {:.3f}, "
-                 "material: {:.0f}",
-                 tag, ProbePoints[i][0], ProbePoints[i][1],
-                 hitDistance >= 0.0f ? std::to_string(hitDistance) : std::string("n/a"), linearDepth, rough, t[0][3]);
-
-        // If the game's normals are world space, this is them in view space: n * R (row vector)
-        const float nv[3] = { n[0] * v[0][0] + n[1] * v[1][0] + n[2] * v[2][0],
-                              n[0] * v[0][1] + n[1] * v[1][1] + n[2] * v[2][1],
-                              n[0] * v[0][2] + n[1] * v[1][2] + n[2] * v[2][2] };
-
-        LOG_INFO("{}    game normals: ({:.3f}, {:.3f}, {:.3f}, {:.3f}) len {:.3f}, as view space: "
-                 "({:.3f}, {:.3f}, {:.3f}), diffuse albedo: ({:.3f}, {:.3f}, {:.3f}), specular albedo: ({:.3f}, "
-                 "{:.3f}, {:.3f})",
-                 tag, n[0], n[1], n[2], n[3], sqrtf(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]), nv[0], nv[1], nv[2],
-                 diffuse[0], diffuse[1], diffuse[2], specular[0], specular[1], specular[2]);
-
-        if (inCapture)
-        {
-            auto& st = _captureStats[i];
-
-            st.count++;
-            st.hitMin = std::min(st.hitMin, hitDistance);
-            st.hitMax = std::max(st.hitMax, hitDistance);
-            st.depthMin = std::min(st.depthMin, linearDepth);
-            st.depthMax = std::max(st.depthMax, linearDepth);
-            st.roughMin = std::min(st.roughMin, rough);
-            st.roughMax = std::max(st.roughMax, rough);
-            st.alphaMin = std::min(st.alphaMin, n[3]);
-            st.alphaMax = std::max(st.alphaMax, n[3]);
-
-            for (int c = 0; c < 3; c++)
-            {
-                st.normalSum[c] += n[c];
-                st.viewNormalSum[c] += nv[c];
-            }
-        }
-    }
-
-    uint32_t sentinels = 0;
-    memcpy(&sentinels, data + ProbeCounterOffset, sizeof(sentinels));
-
-    if (_probePixels[slot] > 0)
-    {
-        const float percent = 100.0f * (float) sentinels / (float) _probePixels[slot];
-        LOG_INFO("{}Probe sentinel pixels: {:.2f}% ({} of {})", tag, percent, sentinels, _probePixels[slot]);
-
-        if (inCapture)
-        {
-            _captureSentinelMin = std::min(_captureSentinelMin, percent);
-            _captureSentinelMax = std::max(_captureSentinelMax, percent);
-            _captureSentinelSum += percent;
-            _captureSentinelCount++;
-        }
     }
 }
 
@@ -891,7 +581,7 @@ bool FSRDFeatureDx12::InitInternal(ID3D12GraphicsCommandList* InCommandList, NVS
     _compose = std::make_unique<FsrdPass_Dx12>("FSRD Compose", Device, 10, 2, fsrd_compose_cso, sizeof(fsrd_compose_cso));
     _restore = std::make_unique<FsrdPass_Dx12>("FSRD Restore", Device, 4, 1, fsrd_restore_cso, sizeof(fsrd_restore_cso));
     // Diagnostics only, the denoiser works without it
-    _probePass = std::make_unique<FsrdPass_Dx12>("FSRD Probe", Device, 6, 1, fsrd_probe_cso, sizeof(fsrd_probe_cso));
+    _probe = std::make_unique<FsrdProbe>(Device);
 
     if (!_prepass->CanRender() || !_compose->CanRender() || !_restore->CanRender() || !CreateScratchResources() ||
         !CreateDenoiserContext())
@@ -901,73 +591,80 @@ bool FSRDFeatureDx12::InitInternal(ID3D12GraphicsCommandList* InCommandList, NVS
         _prepass.reset();
         _compose.reset();
         _restore.reset();
-        _probePass.reset();
+        _probe.reset();
         _denoiserDisabled = true;
     }
 
     return true;
 }
 
-ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters)
+bool FSRDFeatureDx12::GatherInputs(NVSDK_NGX_Parameter* InParameters, FrameInputs& in)
 {
-    auto color = GetResource(InParameters, NVSDK_NGX_Parameter_Color);
-    auto motionVectors = GetResource(InParameters, NVSDK_NGX_Parameter_MotionVectors);
-    auto depth = GetResource(InParameters, NVSDK_NGX_Parameter_Depth);
-    auto normals = GetResource(InParameters, DlssdKeys::Normals);
-    auto roughness = GetResource(InParameters, DlssdKeys::Roughness);
-    auto diffuseAlbedo = GetResource(InParameters, DlssdKeys::DiffuseAlbedo);
-    auto specularAlbedo = GetResource(InParameters, DlssdKeys::SpecularAlbedo);
-    auto particles = GetParticleLayer(InParameters, color);
-    auto specularHitDistance = GetResource(InParameters, DlssdKeys::SpecularHitDistance);
+    in.color = GetResource(InParameters, NVSDK_NGX_Parameter_Color);
+    in.motionVectors = GetResource(InParameters, NVSDK_NGX_Parameter_MotionVectors);
+    in.depth = GetResource(InParameters, NVSDK_NGX_Parameter_Depth);
+    in.normals = GetResource(InParameters, DlssdKeys::Normals);
+    in.roughness = GetResource(InParameters, DlssdKeys::Roughness);
+    in.diffuseAlbedo = GetResource(InParameters, DlssdKeys::DiffuseAlbedo);
+    in.specularAlbedo = GetResource(InParameters, DlssdKeys::SpecularAlbedo);
+    in.specularHitDistance = GetResource(InParameters, DlssdKeys::SpecularHitDistance);
+    in.particles = GetParticleLayer(InParameters, in.color);
 
-    if (color == nullptr || motionVectors == nullptr || depth == nullptr || normals == nullptr ||
-        diffuseAlbedo == nullptr || specularAlbedo == nullptr)
+    if (in.color == nullptr || in.motionVectors == nullptr || in.depth == nullptr || in.normals == nullptr ||
+        in.diffuseAlbedo == nullptr || in.specularAlbedo == nullptr)
     {
         LOG_WARN("Skipping denoise, missing input (color: {}, mv: {}, depth: {}, normals: {}, diffuseAlbedo: {}, "
                  "specularAlbedo: {})",
-                 (void*) color, (void*) motionVectors, (void*) depth, (void*) normals, (void*) diffuseAlbedo,
-                 (void*) specularAlbedo);
-        return nullptr;
+                 (void*) in.color, (void*) in.motionVectors, (void*) in.depth, (void*) in.normals,
+                 (void*) in.diffuseAlbedo, (void*) in.specularAlbedo);
+        return false;
     }
 
-    unsigned int renderWidth = 0, renderHeight = 0;
-    GetRenderResolution(InParameters, &renderWidth, &renderHeight);
+    GetRenderResolution(InParameters, &in.renderWidth, &in.renderHeight);
 
-    if (renderWidth == 0 || renderHeight == 0)
-        return nullptr;
+    if (in.renderWidth == 0 || in.renderHeight == 0)
+        return false;
 
     // Never larger than the game's color texture, which holds the render area
-    auto colorDesc = color->GetDesc();
-    renderWidth = std::min(renderWidth, (unsigned int) colorDesc.Width);
-    renderHeight = std::min(renderHeight, (unsigned int) colorDesc.Height);
+    auto colorDesc = in.color->GetDesc();
+    in.renderWidth = std::min(in.renderWidth, (unsigned int) colorDesc.Width);
+    in.renderHeight = std::min(in.renderHeight, (unsigned int) colorDesc.Height);
 
-    if ((renderWidth > _maxRenderWidth || renderHeight > _maxRenderHeight) &&
-        !ResizeForRenderSize(renderWidth, renderHeight))
+    if ((in.renderWidth > _maxRenderWidth || in.renderHeight > _maxRenderHeight) &&
+        !ResizeForRenderSize(in.renderWidth, in.renderHeight))
     {
-        return nullptr;
+        return false;
     }
 
-    if (!PrepareComposedColor(color))
+    if (!PrepareComposedColor(in.color))
     {
         DisableDenoiserOnFailure("Can't create the composed color texture");
-        return nullptr;
+        return false;
     }
 
     bool found = false;
     auto view = ReadMatrix(InParameters, DlssdKeys::WorldToViewMatrix, &found);
-    const bool hasView = found;
+    in.hasView = found;
     auto projection = ReadMatrix(InParameters, DlssdKeys::ViewToClipMatrix, &found);
 
     if (!found || projection.rows[3].z == 0.0f)
     {
         LOG_WARN("Skipping denoise, no usable ViewToClipMatrix to linearize depth");
-        return nullptr;
+        return false;
     }
 
-    const bool separateRoughness = !_roughnessPacked && roughness != nullptr;
+    memcpy(in.view, &view, sizeof(in.view));
+    memcpy(in.projection, &projection, sizeof(in.projection));
+    in.separateRoughness = !_roughnessPacked && in.roughness != nullptr;
+    return true;
+}
 
-    // Read every frame so the in-game menu applies immediately
-    const int splitMode = std::clamp(Config::Instance()->FsrdSplitMode.value_or_default(), 0, 2);
+FsrdPass_Dx12::Constants FSRDFeatureDx12::BuildConstants(const FrameInputs& in, NVSDK_NGX_Parameter* InParameters)
+{
+    auto* config = Config::Instance();
+
+    // Modes are read every frame so the menu applies immediately; the history doesn't fit another mode
+    const int splitMode = std::clamp(config->FsrdSplitMode.value_or_default(), 0, 2);
 
     if (splitMode != _lastSplitMode)
     {
@@ -976,33 +673,7 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
         _resetDenoiserHistory = true;
     }
 
-    ApplyTuning();
-
-    float viewRows[4][4] {};
-    memcpy(viewRows, &view, sizeof(viewRows));
-
-    // DLSS motion vectors point to the previous frame and turn into pixels with MV scale, FFX wants
-    // PreviousUV - CurrentUV, the prepass converts them and adds the linear depth delta
-    float mvScaleX = 1.0f, mvScaleY = 1.0f;
-    InParameters->Get(NVSDK_NGX_Parameter_MV_Scale_X, &mvScaleX);
-    InParameters->Get(NVSDK_NGX_Parameter_MV_Scale_Y, &mvScaleY);
-    const float mvWidth = (float) (LowResMV() ? renderWidth : DisplayWidth());
-    const float mvHeight = (float) (LowResMV() ? renderHeight : DisplayHeight());
-
-    FsrdPass_Dx12::Constants constants {};
-    constants.MvScale[0] = mvScaleX / mvWidth;
-    constants.MvScale[1] = mvScaleY / mvHeight;
-    constants.MvTexelScale[0] = LowResMV() ? 1.0f : mvWidth / (float) renderWidth;
-    constants.MvTexelScale[1] = LowResMV() ? 1.0f : mvHeight / (float) renderHeight;
-    constants.InvProj[0] = projection.rows[0].x != 0.0f ? 1.0f / projection.rows[0].x : 1.0f;
-    constants.InvProj[1] = projection.rows[1].y != 0.0f ? 1.0f / projection.rows[1].y : 1.0f;
-    constants.MaxStaticMvError = 2.0f / (float) renderWidth; // ~2 render pixels
-    constants.HasPrevView = (hasView && _hasPrevView) ? 1 : 0;
-    constants.ReflectionReactive = std::clamp(Config::Instance()->FsrdReflectionReactive.value_or_default(), 0.0f, 1.0f);
-    constants.GameMaskBias = Config::Instance()->DlssReactiveMaskBias.value_or_default();
-    constants.SpecHitScale = std::max(Config::Instance()->FsrdSpecHitDistanceScale.value_or_default(), 0.0001f);
-    // Read every frame so the menu applies immediately; the history doesn't fit the other mode
-    const int sentinelMode = std::clamp(Config::Instance()->FsrdSentinelMode.value_or_default(), 0, 1);
+    const int sentinelMode = std::clamp(config->FsrdSentinelMode.value_or_default(), 0, 1);
 
     if (sentinelMode != _lastSentinelMode)
     {
@@ -1011,25 +682,39 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
         _resetDenoiserHistory = true;
     }
 
-    // Camera forward in world space: third column of the row-vector view rotation
-    constants.CameraForward[0] = viewRows[0][2];
-    constants.CameraForward[1] = viewRows[1][2];
-    constants.CameraForward[2] = viewRows[2][2];
-    constants.SentinelMode = (uint32_t) sentinelMode;
-    _probeCounterSlot = _sentinelFrame++ % 2;
-    constants.CounterSlot = _probeCounterSlot;
-    constants.RestoreStrength = std::clamp(Config::Instance()->FsrdLowFreqRestore.value_or_default(), 0.0f, 1.0f);
-    // 4 taps each side, so the stride is a quarter of the radius
-    constants.RestoreStride = std::max(Config::Instance()->FsrdLowFreqRadius.value_or_default() / 4.0f, 1.0f);
+    // DLSS motion vectors point to the previous frame and turn into pixels with MV scale, FFX wants
+    // PreviousUV - CurrentUV, the prepass converts them and adds the linear depth delta
+    float mvScaleX = 1.0f, mvScaleY = 1.0f;
+    InParameters->Get(NVSDK_NGX_Parameter_MV_Scale_X, &mvScaleX);
+    InParameters->Get(NVSDK_NGX_Parameter_MV_Scale_Y, &mvScaleY);
+    const float mvWidth = (float) (LowResMV() ? in.renderWidth : DisplayWidth());
+    const float mvHeight = (float) (LowResMV() ? in.renderHeight : DisplayHeight());
 
-    constants.RoughnessOverride = Config::Instance()->FsrdRoughnessOverrideEnabled.value_or_default()
-                                      ? std::clamp(Config::Instance()->FsrdRoughnessOverride.value_or_default(), 0.0f, 1.0f)
-                                      : -1.0f;
+    FsrdPass_Dx12::Constants constants {};
+    constants.ProjZZ = in.projection[2][2];
+    constants.ProjWZ = in.projection[3][2];
+    constants.DiffuseHitDistance = config->FsrdDiffuseHitDistance.value_or_default();
+    constants.Flags = (in.separateRoughness ? FlagSeparateRoughness : 0) |
+                      (in.specularHitDistance != nullptr ? FlagHasSpecHitDistance : 0) |
+                      (DepthInverted() ? FlagDepthInverted : 0) | (in.particles != nullptr ? FlagParticleLayer : 0);
+    constants.RenderWidth = in.renderWidth;
+    constants.RenderHeight = in.renderHeight;
+    constants.SkyDepth = SkyDepth;
+    constants.SplitMode = (uint32_t) splitMode;
+
+    constants.MvScale[0] = mvScaleX / mvWidth;
+    constants.MvScale[1] = mvScaleY / mvHeight;
+    constants.MvTexelScale[0] = LowResMV() ? 1.0f : mvWidth / (float) in.renderWidth;
+    constants.MvTexelScale[1] = LowResMV() ? 1.0f : mvHeight / (float) in.renderHeight;
+    constants.InvProj[0] = in.projection[0][0] != 0.0f ? 1.0f / in.projection[0][0] : 1.0f;
+    constants.InvProj[1] = in.projection[1][1] != 0.0f ? 1.0f / in.projection[1][1] : 1.0f;
+    constants.HasPrevView = (in.hasView && _hasPrevView) ? 1 : 0;
+    constants.MaxStaticMvError = 2.0f / (float) in.renderWidth; // ~2 render pixels
 
     if (constants.HasPrevView)
     {
         float toPrev[4][4];
-        ViewToPrevView(viewRows, _prevView, toPrev);
+        ViewToPrevView(in.view, _prevView, toPrev);
 
         for (int i = 0; i < 4; i++)
         {
@@ -1039,35 +724,48 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
         }
     }
 
-    constants.ProjZZ = projection.rows[2].z;
-    constants.ProjWZ = projection.rows[3].z;
-    constants.DiffuseHitDistance = Config::Instance()->FsrdDiffuseHitDistance.value_or_default();
-    constants.Flags = (separateRoughness ? FlagSeparateRoughness : 0) |
-                      (specularHitDistance != nullptr ? FlagHasSpecHitDistance : 0) |
-                      (DepthInverted() ? FlagDepthInverted : 0) |
-                      (particles != nullptr ? FlagParticleLayer : 0);
-    constants.RenderWidth = renderWidth;
-    constants.RenderHeight = renderHeight;
-    constants.SkyDepth = SkyDepth;
-    constants.SplitMode = (uint32_t) splitMode;
+    constants.ReflectionReactive = std::clamp(config->FsrdReflectionReactive.value_or_default(), 0.0f, 1.0f);
+    constants.GameMaskBias = config->DlssReactiveMaskBias.value_or_default();
+    constants.SpecHitScale = std::max(config->FsrdSpecHitDistanceScale.value_or_default(), 0.0001f);
+    constants.RoughnessOverride = config->FsrdRoughnessOverrideEnabled.value_or_default()
+                                      ? std::clamp(config->FsrdRoughnessOverride.value_or_default(), 0.0f, 1.0f)
+                                      : -1.0f;
 
+    // Camera forward in world space: third column of the row-vector view rotation
+    constants.CameraForward[0] = in.view[0][2];
+    constants.CameraForward[1] = in.view[1][2];
+    constants.CameraForward[2] = in.view[2][2];
+    constants.SentinelMode = (uint32_t) sentinelMode;
+
+    _sentinelSlot = _sentinelFrame++ % 2;
+    constants.CounterSlot = _sentinelSlot;
+
+    constants.RestoreStrength = std::clamp(config->FsrdLowFreqRestore.value_or_default(), 0.0f, 1.0f);
+    // 4 taps each side, so the stride is a quarter of the radius
+    constants.RestoreStride = std::max(config->FsrdLowFreqRadius.value_or_default() / 4.0f, 1.0f);
+
+    return constants;
+}
+
+bool FSRDFeatureDx12::RunPrepass(ID3D12GraphicsCommandList* InCommandList, const FrameInputs& in,
+                                 const FsrdPass_Dx12::Constants& constants)
+{
     const auto read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     const auto write = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
-    // 1. Prepass: game resources -> denoiser inputs
     Barriers(InCommandList, { { _diffuseIn, read, write },
                               { _specularIn, read, write },
                               { _linearDepth, read, write },
                               { _packedNormals, read, write },
                               { _motionVectors, read, write } });
 
-    const bool prepassOk = _prepass->Dispatch(
-        InCommandList,
-        { color, diffuseAlbedo, specularAlbedo, normals,
-          separateRoughness ? roughness : nullptr, depth,
-          specularHitDistance, motionVectors },
-        { _diffuseIn, _specularIn, _linearDepth, _packedNormals, _motionVectors, _sentinelCounter }, constants,
-        renderWidth, renderHeight);
+    const bool ok = _prepass->Dispatch(InCommandList,
+                                       { in.color, in.diffuseAlbedo, in.specularAlbedo, in.normals,
+                                         in.separateRoughness ? in.roughness : nullptr, in.depth,
+                                         in.specularHitDistance, in.motionVectors },
+                                       { _diffuseIn, _specularIn, _linearDepth, _packedNormals, _motionVectors,
+                                         _sentinelCounter },
+                                       constants, in.renderWidth, in.renderHeight);
 
     Barriers(InCommandList, { { _diffuseIn, write, read },
                               { _specularIn, write, read },
@@ -1075,13 +773,18 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
                               { _packedNormals, write, read },
                               { _motionVectors, write, read } });
 
-    if (!prepassOk)
-    {
+    if (!ok)
         DisableDenoiserOnFailure("FSRD prepass dispatch failed");
-        return nullptr;
-    }
 
-    // 2. Denoise
+    return ok;
+}
+
+bool FSRDFeatureDx12::RunDenoiser(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters,
+                                  const FrameInputs& in)
+{
+    const auto read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    const auto write = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+
     ffxDispatchDescDenoiserIndirectSpecular specularDesc {};
     specularDesc.header.type = FFX_API_DISPATCH_DESC_TYPE_DENOISER_INDIRECT_SPECULAR;
     specularDesc.signal.input = ffxApiGetResourceDX12(_specularIn, FFX_API_RESOURCE_STATE_COMPUTE_READ);
@@ -1101,8 +804,8 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
     dispatchDesc.linearDepth = ffxApiGetResourceDX12(_linearDepth, FFX_API_RESOURCE_STATE_COMPUTE_READ);
     dispatchDesc.normals = ffxApiGetResourceDX12(_packedNormals, FFX_API_RESOURCE_STATE_COMPUTE_READ);
     dispatchDesc.motionVectors = ffxApiGetResourceDX12(_motionVectors, FFX_API_RESOURCE_STATE_COMPUTE_READ);
-    dispatchDesc.specularAlbedo = ffxApiGetResourceDX12(specularAlbedo, FFX_API_RESOURCE_STATE_COMPUTE_READ);
-    dispatchDesc.diffuseAlbedo = ffxApiGetResourceDX12(diffuseAlbedo, FFX_API_RESOURCE_STATE_COMPUTE_READ);
+    dispatchDesc.specularAlbedo = ffxApiGetResourceDX12(in.specularAlbedo, FFX_API_RESOURCE_STATE_COMPUTE_READ);
+    dispatchDesc.diffuseAlbedo = ffxApiGetResourceDX12(in.diffuseAlbedo, FFX_API_RESOURCE_STATE_COMPUTE_READ);
 
     // Already PreviousUV - CurrentUV with the depth delta in B (prepass)
     dispatchDesc.motionVectorScale = { 1.0f, 1.0f, 1.0f };
@@ -1114,26 +817,26 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
 
     dispatchDesc.cameraPositionDelta = { 0.0f, 0.0f, 0.0f };
 
-    if (hasView)
+    if (in.hasView)
     {
         if (_hasPrevView)
         {
             float cameraPos[3], prevCameraPos[3];
-            CameraPosition(viewRows, cameraPos);
+            CameraPosition(in.view, cameraPos);
             CameraPosition(_prevView, prevCameraPos);
 
             dispatchDesc.cameraPositionDelta = { prevCameraPos[0] - cameraPos[0], prevCameraPos[1] - cameraPos[1],
                                                  prevCameraPos[2] - cameraPos[2] };
         }
 
-        memcpy(_prevView, viewRows, sizeof(viewRows));
+        memcpy(_prevView, in.view, sizeof(_prevView));
         _hasPrevView = true;
     }
 
-    dispatchDesc.view = view;
-    dispatchDesc.projection = projection;
+    memcpy(&dispatchDesc.view, in.view, sizeof(dispatchDesc.view));
+    memcpy(&dispatchDesc.projection, in.projection, sizeof(dispatchDesc.projection));
     dispatchDesc.linearDepthBounds = { 0.0f, SkyDepthBound };
-    dispatchDesc.renderSize = { renderWidth, renderHeight };
+    dispatchDesc.renderSize = { in.renderWidth, in.renderHeight };
     dispatchDesc.frameIndex = _denoiserFrameIndex++;
 
     unsigned int reset = 0;
@@ -1147,10 +850,10 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
 
     // Debug view: the overview is drawn into the composed color, which then replaces the image
     ffxDispatchDescDenoiserDebugView debugDesc {};
-    auto composedDesc = _composedColor->GetDesc();
 
     if (_debugView)
     {
+        auto composedDesc = _composedColor->GetDesc();
         debugDesc.header.type = FFX_API_DISPATCH_DESC_TYPE_DENOISER_DEBUG_VIEW;
         debugDesc.output = ffxApiGetResourceDX12(_composedColor, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
         debugDesc.outputSize = { (uint32_t) composedDesc.Width, composedDesc.Height };
@@ -1169,19 +872,19 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
     {
         LOG_ERROR("Denoiser ffxDispatch failed: {}", FfxApiProxy::ReturnCodeToString(result));
         DisableDenoiserOnFailure("FSR Ray Regeneration dispatch failed");
-        return nullptr;
+        return false;
     }
 
     _resetDenoiserHistory = false;
+    return true;
+}
 
-    if (_debugView)
-    {
-        // The probe reads the inputs, which are the same in debug view
-        ProbeInputs(InCommandList, constants, specularHitDistance, normals, diffuseAlbedo, specularAlbedo, viewRows);
-        return _composedColor;
-    }
+bool FSRDFeatureDx12::RunCompose(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters,
+                                 const FrameInputs& in, const FsrdPass_Dx12::Constants& constants, bool restoreOn)
+{
+    const auto read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    const auto write = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
-    // 3. Compose: denoised signals * albedo -> composed color
     Barriers(InCommandList, { { _diffuseOut, write, read },
                               { _specularOut, write, read },
                               { _composedColor, read, write },
@@ -1197,53 +900,98 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
         LOG_INFO("Show denoiser input: {}", showInput);
         _wasShowingInput = showInput;
     }
-    auto diffuseSignal = showInput ? _diffuseIn : _diffuseOut;
-    auto specularSignal = showInput ? _specularIn : _specularOut;
 
     // With the low frequency restore on, its residual (game color - composed) must not see the particles, so
     // compose only marks them in the reactive mask and the restore pass puts them over
-    const bool restoreOn = constants.RestoreStrength > 0.0f;
-    const uint32_t passFlags = constants.Flags;
+    auto composeConstants = constants;
 
-    if (restoreOn && particles != nullptr)
-        constants.Flags |= FlagParticleDeferred;
+    if (restoreOn && in.particles != nullptr)
+        composeConstants.Flags |= FlagParticleDeferred;
 
-    const bool composeOk = _compose->Dispatch(
-        InCommandList,
-        { color, diffuseAlbedo, specularAlbedo, depth, diffuseSignal, specularSignal, gameReactive, _packedNormals,
-          normals, particles },
-        { _composedColor, _reactiveMask }, constants, (UINT) composedDesc.Width, composedDesc.Height);
+    auto composedDesc = _composedColor->GetDesc();
 
-    constants.Flags = passFlags;
+    const bool ok = _compose->Dispatch(InCommandList,
+                                       { in.color, in.diffuseAlbedo, in.specularAlbedo, in.depth,
+                                         showInput ? _diffuseIn : _diffuseOut, showInput ? _specularIn : _specularOut,
+                                         gameReactive, _packedNormals, in.normals, in.particles },
+                                       { _composedColor, _reactiveMask }, composeConstants, (UINT) composedDesc.Width,
+                                       composedDesc.Height);
 
-    // With the restore on, its output goes to UAV in the same batch
+    // With the restore on (and compose done), its output goes to UAV in the same batch
     Barriers(InCommandList, { { _diffuseOut, read, write },
                               { _specularOut, read, write },
                               { _composedColor, write, read },
                               { _reactiveMask, write, read },
-                              { restoreOn ? _restoredColor : nullptr, read, write } });
+                              { (restoreOn && ok) ? _restoredColor : nullptr, read, write } });
 
-    if (!composeOk)
-    {
-        Barriers(InCommandList, { { restoreOn ? _restoredColor : nullptr, write, read } });
+    if (!ok)
         DisableDenoiserOnFailure("FSRD compose dispatch failed");
+
+    return ok;
+}
+
+ID3D12Resource* FSRDFeatureDx12::RunRestore(ID3D12GraphicsCommandList* InCommandList, const FrameInputs& in,
+                                            const FsrdPass_Dx12::Constants& constants)
+{
+    // _restoredColor is already in UNORDERED_ACCESS (RunCompose)
+    auto composedDesc = _composedColor->GetDesc();
+
+    const bool ok = _restore->Dispatch(InCommandList, { in.color, _composedColor, _linearDepth, in.particles },
+                                       { _restoredColor }, constants, (UINT) composedDesc.Width, composedDesc.Height);
+
+    Barriers(InCommandList,
+             { { _restoredColor, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE } });
+
+    return ok ? _restoredColor : _composedColor;
+}
+
+void FSRDFeatureDx12::RunProbe(ID3D12GraphicsCommandList* InCommandList, const FrameInputs& in,
+                               const FsrdPass_Dx12::Constants& constants)
+{
+    if (_probe == nullptr)
+        return;
+
+    _probe->Run(InCommandList, constants,
+                { in.specularHitDistance, in.normals, in.diffuseAlbedo, in.specularAlbedo, _linearDepth,
+                  _packedNormals, _sentinelCounter, _sentinelSlot },
+                in.view);
+}
+
+ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters)
+{
+    FrameInputs in {};
+
+    if (!GatherInputs(InParameters, in))
         return nullptr;
+
+    const auto constants = BuildConstants(in, InParameters);
+    ApplyTuning();
+
+    // 1. Prepass: game resources -> demodulated signals, linear depth, packed normals, MVs with depth delta
+    if (!RunPrepass(InCommandList, in, constants))
+        return nullptr;
+
+    // 2. FSR Ray Regeneration
+    if (!RunDenoiser(InCommandList, InParameters, in))
+        return nullptr;
+
+    if (_debugView)
+    {
+        // The probe reads the inputs, which are the same in debug view
+        RunProbe(InCommandList, in, constants);
+        return _composedColor;
     }
 
-    ProbeInputs(InCommandList, constants, specularHitDistance, normals, diffuseAlbedo, specularAlbedo, viewRows);
+    // 3. Compose: denoised signals * albedo (+ particle layer) -> composed color and reactive mask
+    const bool restoreOn = constants.RestoreStrength > 0.0f;
 
-    if (!restoreOn)
-        return _composedColor;
+    if (!RunCompose(InCommandList, InParameters, in, constants, restoreOn))
+        return nullptr;
 
-    // 4. Restore the low frequency part the denoiser removed (fog, haze), then the particles go over
+    RunProbe(InCommandList, in, constants);
 
-    const bool restoreOk = _restore->Dispatch(InCommandList, { color, _composedColor, _linearDepth, particles },
-                                              { _restoredColor }, constants, (UINT) composedDesc.Width,
-                                              composedDesc.Height);
-
-    Barriers(InCommandList, { { _restoredColor, write, read } });
-
-    return restoreOk ? _restoredColor : _composedColor;
+    // 4. Optional low frequency restore, then the particles go over
+    return restoreOn ? RunRestore(InCommandList, in, constants) : _composedColor;
 }
 
 ID3D12Resource* FSRDFeatureDx12::GetParticleLayer(NVSDK_NGX_Parameter* InParameters, ID3D12Resource* color)

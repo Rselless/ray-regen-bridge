@@ -1611,15 +1611,16 @@ void MenuCommon::UpdateVersionAndStartupNotifications(RenderMenuContext& ctx)
 }
 
 // FSRD diagnostic capture currently shown on screen, if any
-static FSRDFeatureDx12* ProbeCaptureFeature()
+static FsrdProbe* ProbeCaptureFeature()
 {
     auto fsrd = dynamic_cast<FSRDFeatureDx12*>(State::Instance().currentFeature);
+    auto probe = fsrd != nullptr ? fsrd->Probe() : nullptr;
 
-    if (fsrd == nullptr)
+    if (probe == nullptr)
         return nullptr;
 
-    if (fsrd->ProbeCapturePending() || fsrd->ProbeCaptureRemaining() > 0.0f || fsrd->ProbeCaptureJustDone())
-        return fsrd;
+    if (probe->CapturePending() || probe->CaptureRemaining() > 0.0f || probe->CaptureJustDone())
+        return probe;
 
     return nullptr;
 }
@@ -1649,29 +1650,29 @@ void MenuCommon::RenderProbeCaptureOverlay(RenderMenuContext& ctx)
     {
         ImGui::SetWindowFontScale(1.5f);
 
-        if (fsrd->ProbeCapturePending() && fsrd->ProbeCaptureCountdown() > 0.0f)
+        if (fsrd->CapturePending() && fsrd->CaptureCountdown() > 0.0f)
         {
             ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)), "FSRD capture '%s' starts in %.1f s",
-                               fsrd->ProbeCaptureLabel(), fsrd->ProbeCaptureCountdown());
+                               fsrd->CaptureLabel(), fsrd->CaptureCountdown());
         }
-        else if (fsrd->ProbeCapturePending())
+        else if (fsrd->CapturePending())
         {
             // Start time passed but no FSRD frame picked it up: the denoiser isn't running
             ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.5f, 0.f, 1.f)),
                                "FSRD capture '%s' waiting: no denoiser frames (Ray Reconstruction off?)",
-                               fsrd->ProbeCaptureLabel());
+                               fsrd->CaptureLabel());
         }
-        else if (const float remaining = fsrd->ProbeCaptureRemaining(); remaining > 0.0f)
+        else if (const float remaining = fsrd->CaptureRemaining(); remaining > 0.0f)
         {
             ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.25f, 0.25f, 1.f)), "REC");
             ImGui::SameLine();
             ImGui::TextColored(toneMapColor(ImVec4(0.3f, 0.8f, 1.f, 1.f)), "FSRD capture #%d '%s': %.1f s",
-                               fsrd->ProbeCaptureCount(), fsrd->ProbeCaptureLabel(), remaining);
+                               fsrd->CaptureCount(), fsrd->CaptureLabel(), remaining);
         }
         else
         {
             ImGui::TextColored(toneMapColor(ImVec4(0.f, 1.f, 0.25f, 1.f)), "FSRD capture #%d '%s' done",
-                               fsrd->ProbeCaptureCount(), fsrd->ProbeCaptureLabel());
+                               fsrd->CaptureCount(), fsrd->CaptureLabel());
         }
     }
 
@@ -2760,33 +2761,36 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                                        "Denoiser off, only upscaling (see OptiScaler.log)");
 
                 // Diagnostic capture: tags the probe lines in the log and writes a per point summary
-                static int captureLabel = 0;
-                ImGui::PushItemWidth(120.0f * menuResScale);
-                ImGui::Combo("##ProbeCaptureLabel", &captureLabel, FSRDFeatureDx12::ProbeCaptureLabels,
-                             FSRDFeatureDx12::ProbeCaptureLabelCount);
-                ImGui::PopItemWidth();
-                ImGui::SameLine();
-
-                const float remaining = fsrd->ProbeCaptureRemaining();
-
-                if (fsrd->ProbeCapturePending())
+                if (auto probe = fsrd->Probe(); probe != nullptr)
                 {
-                    ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)), "Starts in %.1f s, close the menu",
-                                       fsrd->ProbeCaptureCountdown());
-                }
-                else if (remaining > 0.0f)
-                {
-                    ImGui::TextColored(toneMapColor(ImVec4(0.3f, 0.8f, 1.f, 1.f)), "Capturing #%d: %.1f s",
-                                       fsrd->ProbeCaptureCount(), remaining);
-                }
-                else if (ImGui::Button("Start capture (10 s)"))
-                {
-                    fsrd->StartProbeCapture(captureLabel);
-                }
+                    static int captureLabel = 0;
+                    ImGui::PushItemWidth(120.0f * menuResScale);
+                    ImGui::Combo("##ProbeCaptureLabel", &captureLabel, FsrdProbe::CaptureLabels,
+                                 FsrdProbe::CaptureLabelCount);
+                    ImGui::PopItemWidth();
+                    ImGui::SameLine();
 
-                ShowHelpMarker("Records the denoiser inputs at 5 screen points for 10 s\n"
-                               "(~7 samples/s) and writes a summary per point to OptiScaler.log.\n"
-                               "Starts 2 s after pressing: close the menu, a timer shows on screen.");
+                    const float remaining = probe->CaptureRemaining();
+
+                    if (probe->CapturePending())
+                    {
+                        ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)),
+                                           "Starts in %.1f s, close the menu", probe->CaptureCountdown());
+                    }
+                    else if (remaining > 0.0f)
+                    {
+                        ImGui::TextColored(toneMapColor(ImVec4(0.3f, 0.8f, 1.f, 1.f)), "Capturing #%d: %.1f s",
+                                           probe->CaptureCount(), remaining);
+                    }
+                    else if (ImGui::Button("Start capture (10 s)"))
+                    {
+                        probe->StartCapture(captureLabel);
+                    }
+
+                    ShowHelpMarker("Records the denoiser inputs at 5 screen points for 10 s\n"
+                                   "(~7 samples/s) and writes a summary per point to OptiScaler.log.\n"
+                                   "Starts 2 s after pressing: close the menu, a timer shows on screen.");
+                }
             }
 
             ImGui::PushItemWidth(220.0f * menuResScale);

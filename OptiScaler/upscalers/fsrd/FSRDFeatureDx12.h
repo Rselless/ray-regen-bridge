@@ -6,19 +6,20 @@
 //   1. Prepass (fsrd_prepass.hlsl): splits that color into demodulated diffuse/specular signals by albedo, and
 //      builds linear depth and octahedral normals+roughness, all into scratch resources owned by this class.
 //   2. Denoise: FSR Ray Regeneration (amd_fidelityfx_denoiser_dx12.dll, ffx_denoiser.h 1.2.0), scratch in/out only.
-//   3. Compose (fsrd_compose.hlsl): remodulates the denoised signals into a scratch color texture.
-//   4. Upscale: the regular FFX upscaler path (FFXFeatureDx12::EvaluateInternal) with Color pointed at the composed
+//   3. Compose (fsrd_compose.hlsl): remodulates the denoised signals into a scratch color texture and puts the
+//      game's particle layer (DLSSD.ColorBeforeParticles) over it.
+//   4. Optional low frequency restore (fsrd_restore.hlsl).
+//   5. Upscale: the regular FFX upscaler path (FFXFeatureDx12::EvaluateInternal) with Color pointed at the composed
 //      texture, writing the game's Output. If any step fails the game's own color is upscaled instead.
-// No game resource is ever written except Output. [FSRD] EnableDenoiser=false skips steps 1-3.
+// No game resource is ever written except Output. [FSRD] EnableDenoiser=false skips steps 1-4.
 //
 // Resource keys come from NVIDIA's public nvsdk_ngx_defs_dlssd.h / nvsdk_ngx_helpers_dlssd_d3d.h.
 
 #include <upscalers/ffx/FFXFeature_Dx12.h>
 #include <shaders/fsrd/FsrdPass_Dx12.h>
-#include <memory>
-#include <atomic>
+#include "FsrdProbe.h"
 #include <array>
-#include <chrono>
+#include <memory>
 #include <vector>
 
 class FSRDFeatureDx12 : public FFXFeatureDx12
@@ -30,6 +31,8 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     int _denoiserFailures = 0;
     bool _resetDenoiserHistory = true;
     uint32_t _denoiserFrameIndex = 0;
+
+    // Render size the scratch textures and the denoiser context are created for, grown by ResizeForRenderSize
     unsigned int _maxRenderWidth = 0;
     unsigned int _maxRenderHeight = 0;
 
@@ -40,8 +43,12 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     // [FSRD] DebugView, needs a context created with debugging: switching it recreates the context
     bool _debugView = false;
 
-    // Split mode of the last frame, the history is reset when it changes from the menu
+    // Last frame's menu modes, a change resets the history or is logged
     int _lastSplitMode = -1;
+    int _lastSentinelMode = -1;
+    int _lastParticleLayer = -1;
+    bool _wasBypassed = false;
+    bool _wasShowingInput = false;
 
     // Previous frame's WorldToViewMatrix, for cameraPositionDelta and the MV depth delta
     bool _hasPrevView = false;
@@ -58,21 +65,18 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     ID3D12Resource* _specularOut = nullptr;
     ID3D12Resource* _linearDepth = nullptr;
     ID3D12Resource* _packedNormals = nullptr;
-    ID3D12Resource* _motionVectors = nullptr; // game MVs in UV + linear depth delta in B
-    ID3D12Resource* _composedColor = nullptr; // same size/format as the game's color, recreated when it changes
-    ID3D12Resource* _reactiveMask = nullptr;  // R8, same size as the composed color, given to FSR as FSR.reactive
-    ID3D12Resource* _restoredColor = nullptr; // composed color + low frequency restore, same size/format
+    ID3D12Resource* _motionVectors = nullptr;   // game MVs in UV + linear depth delta in B
+    ID3D12Resource* _composedColor = nullptr;   // same size/format as the game's color, recreated when it changes
+    ID3D12Resource* _reactiveMask = nullptr;    // R8, same size as the composed color, given to FSR as FSR.reactive
+    ID3D12Resource* _restoredColor = nullptr;   // restore / bypass with particles output, same size/format
     ID3D12Resource* _sentinelCounter = nullptr; // 2x1 R32_UINT, sentinel texels per frame, ping-ponged
     uint32_t _sentinelFrame = 0;
-    int _lastSentinelMode = -1;
-    int _lastParticleLayer = -1;
-    bool _wasBypassed = false;
-    bool _wasShowingInput = false;
+    uint32_t _sentinelSlot = 0; // SentinelCounter texel the current frame counts into
 
     std::unique_ptr<FsrdPass_Dx12> _prepass;
     std::unique_ptr<FsrdPass_Dx12> _compose;
     std::unique_ptr<FsrdPass_Dx12> _restore;
-    std::unique_ptr<FsrdPass_Dx12> _probePass;
+    std::unique_ptr<FsrdProbe> _probe; // diagnostics, null when the denoiser is off
 
     // Replaced resources and denoiser contexts, released RetireFrames evaluations later (the GPU can still be
     // running work that uses them)
@@ -85,68 +89,63 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
 
     std::vector<RetiredObject> _retired;
     uint32_t _evalFrame = 0;
-    void Retire(ID3D12Resource*& resource);
-    void RetireDenoiserContext();
-    void ReleaseRetired();
-    static void ReleaseRetiredObject(RetiredObject& item);
 
     bool _loggedInputsOnce = false;
 
+    // Everything one Denoise() call works with
+    struct FrameInputs
+    {
+        ID3D12Resource* color = nullptr;
+        ID3D12Resource* motionVectors = nullptr;
+        ID3D12Resource* depth = nullptr;
+        ID3D12Resource* normals = nullptr;
+        ID3D12Resource* roughness = nullptr;
+        ID3D12Resource* diffuseAlbedo = nullptr;
+        ID3D12Resource* specularAlbedo = nullptr;
+        ID3D12Resource* specularHitDistance = nullptr;
+        ID3D12Resource* particles = nullptr; // DLSSD.ColorBeforeParticles when the particle layer is on
+        unsigned int renderWidth = 0;
+        unsigned int renderHeight = 0;
+        float view[4][4] {};       // WorldToViewMatrix, row-vector
+        float projection[4][4] {}; // ViewToClipMatrix, row-vector
+        bool hasView = false;
+        bool separateRoughness = false;
+    };
+
     bool CreateDenoiserContext();
     void UpdateDebugView();
-    ID3D12Resource* GetParticleLayer(NVSDK_NGX_Parameter* InParameters, ID3D12Resource* color);
-    ID3D12Resource* BypassWithParticles(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters);
     bool CreateScratchResources();
     bool ResizeForRenderSize(unsigned int renderWidth, unsigned int renderHeight);
-    std::array<ID3D12Resource**, 13> ScratchResources();
+    std::array<ID3D12Resource**, 11> ScratchResources();
     void ReleaseScratchResources();
     bool PrepareComposedColor(ID3D12Resource* color);
     void DisableDenoiserOnFailure(const char* reason);
     void ApplyTuning();
 
-    // Logs the inputs at a few screen points (during captures, or every ~2 s with [FSRD] Diagnostics). The
-    // fsrd_probe shader reads them into _probeTexels, which is copied into a readback buffer read 2 rounds later.
-    ID3D12Resource* _probeReadback = nullptr;
-    ID3D12Resource* _probeTexels = nullptr;
-    uint32_t _probeFrame = 0;
-    bool _probeSlotWritten[2] {};
-    float _probeView[2][4][4] {}; // WorldToViewMatrix of each round, to tell world from view space normals
-    uint32_t _probeRound = 0;
-    int _probeSlotCapture[2] {};   // capture id each slot was copied for, 0 = regular probe
-    uint32_t _probePixels[2] {};   // render area of each round, for the sentinel percentage
-    uint32_t _probeCounterSlot = 0; // SentinelCounter texel the current frame counted into
-    float _captureSentinelMin = 0.0f, _captureSentinelMax = 0.0f, _captureSentinelSum = 0.0f;
-    int _captureSentinelCount = 0;
-
-    // Timed capture started from the menu: faster sampling, tagged log lines and a per point summary at the end
-    struct ProbeStats
-    {
-        int count = 0;
-        float hitMin = 1e30f, hitMax = -1e30f;
-        float depthMin = 1e30f, depthMax = -1e30f;
-        float roughMin = 1e30f, roughMax = -1e30f;
-        float alphaMin = 1e30f, alphaMax = -1e30f;
-        float normalSum[3] {};
-        float viewNormalSum[3] {};
-    };
-
-    std::atomic<int> _captureRequest { -1 }; // label index, set by the menu thread
-    std::atomic<int64_t> _captureStartNs { 0 };
-    std::atomic<int64_t> _captureEndNs { 0 };
-    std::atomic<int64_t> _captureDoneUntilNs { 0 };
-    std::atomic<int> _captureShownLabel { 0 }; // label of the pending/running/last capture, for the overlay
-    std::atomic<int> _captureId { 0 };
-    int _captureLabel = 0;
-    bool _captureActive = false;
-    ProbeStats _captureStats[5];
-    void FinishProbeCapture();
-    void ProbeInputs(ID3D12GraphicsCommandList* cmdList, const FsrdPass_Dx12::Constants& constants,
-                     ID3D12Resource* specularHitDistance, ID3D12Resource* normals, ID3D12Resource* diffuseAlbedo,
-                     ID3D12Resource* specularAlbedo, const float view[4][4]);
-    void LogProbeSlot(const uint8_t* data, int slot);
+    void Retire(ID3D12Resource*& resource);
+    void RetireDenoiserContext();
+    void ReleaseRetired();
+    static void ReleaseRetiredObject(RetiredObject& item);
 
     void LogInputsOnce(NVSDK_NGX_Parameter* InParameters);
     void ProcessInitParams(NVSDK_NGX_Parameter* InParameters);
+
+    ID3D12Resource* GetParticleLayer(NVSDK_NGX_Parameter* InParameters, ID3D12Resource* color);
+    ID3D12Resource* BypassWithParticles(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters);
+
+    // Denoise() steps, each returns false (or the fallback) after logging a failure
+    bool GatherInputs(NVSDK_NGX_Parameter* InParameters, FrameInputs& in);
+    FsrdPass_Dx12::Constants BuildConstants(const FrameInputs& in, NVSDK_NGX_Parameter* InParameters);
+    bool RunPrepass(ID3D12GraphicsCommandList* InCommandList, const FrameInputs& in,
+                    const FsrdPass_Dx12::Constants& constants);
+    bool RunDenoiser(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters,
+                     const FrameInputs& in);
+    bool RunCompose(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters,
+                    const FrameInputs& in, const FsrdPass_Dx12::Constants& constants, bool restoreOn);
+    ID3D12Resource* RunRestore(ID3D12GraphicsCommandList* InCommandList, const FrameInputs& in,
+                               const FsrdPass_Dx12::Constants& constants);
+    void RunProbe(ID3D12GraphicsCommandList* InCommandList, const FrameInputs& in,
+                  const FsrdPass_Dx12::Constants& constants);
 
     // Returns the composed color to upscale, or nullptr to upscale the game's color as is
     ID3D12Resource* Denoise(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters);
@@ -161,53 +160,8 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     // For the menu: false when the denoiser is off (config, missing dll, init or dispatch failures)
     bool DenoiserActive() const { return !_denoiserDisabled && _denoiserContextCreated; }
 
-    // Diagnostic capture of the probe for ProbeCaptureSeconds, started from the menu
-    static constexpr const char* ProbeCaptureLabels[] = { "still", "floor", "horizon", "walking", "free" };
-    static constexpr int ProbeCaptureLabelCount = 5;
-    static constexpr float ProbeCaptureSeconds = 10.0f;
-    static constexpr float ProbeCaptureDelaySeconds = 2.0f; // time to close the menu before sampling starts
-    static constexpr float ProbeCaptureDoneSeconds = 3.0f;  // how long the overlay says the capture is done
-
-    // Starts ProbeCaptureDelaySeconds from now, so the menu can be closed first
-    void StartProbeCapture(int labelIndex)
-    {
-        _captureShownLabel.store(labelIndex);
-        _captureStartNs.store(NowNs() + SecondsToNs(ProbeCaptureDelaySeconds));
-        _captureRequest.store(labelIndex);
-    }
-
-    int ProbeCaptureCount() const { return _captureId.load(); }
-    const char* ProbeCaptureLabel() const { return ProbeCaptureLabels[_captureShownLabel.load()]; }
-
-    // Seconds until a requested capture starts sampling, 0 when none is pending
-    float ProbeCaptureCountdown() const
-    {
-        return _captureRequest.load() >= 0 ? NsToSeconds(_captureStartNs.load() - NowNs()) : 0.0f;
-    }
-
-    bool ProbeCapturePending() const { return _captureRequest.load() >= 0; }
-
-    // Seconds left in the running capture, 0 when none is running
-    float ProbeCaptureRemaining() const
-    {
-        return ProbeCapturePending() ? 0.0f : NsToSeconds(_captureEndNs.load() - NowNs());
-    }
-
-    // True for a few seconds after a capture ends
-    bool ProbeCaptureJustDone() const { return NowNs() < _captureDoneUntilNs.load(); }
-
-  private:
-    static int64_t NowNs()
-    {
-        return std::chrono::duration_cast<std::chrono::nanoseconds>(
-                   std::chrono::steady_clock::now().time_since_epoch())
-            .count();
-    }
-
-    static int64_t SecondsToNs(float seconds) { return (int64_t) ((double) seconds * 1e9); }
-    static float NsToSeconds(int64_t ns) { return ns > 0 ? (float) ((double) ns / 1e9) : 0.0f; }
-
-  public:
+    // For the menu: input probe and timed captures, null when the denoiser is off
+    FsrdProbe* Probe() const { return _probe.get(); }
 
     FSRDFeatureDx12(unsigned int InHandleId, NVSDK_NGX_Parameter* InParameters);
     ~FSRDFeatureDx12();

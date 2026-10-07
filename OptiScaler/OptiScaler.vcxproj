@@ -515,6 +515,8 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="upscalers\dlssd\DLSSDFeature_Dx12.h" />
     <ClInclude Include="upscalers\fsrd\FSRDFeatureDx12.h" />
     <ClInclude Include="upscalers\fsrd\ffx_denoiser_compat.h" />
+    <ClInclude Include="upscalers\fsrd\FsrdProbe.h" />
+    <ClInclude Include="upscalers\fsrd\FsrdUtil.h" />
     <ClInclude Include="upscalers\dlssd\DLSSDFeature_Vk.h" />
     <ClInclude Include="upscalers\dlss\DLSSFeature.h" />
     <ClInclude Include="upscalers\dlss\DLSSFeature_Dx11.h" />
@@ -780,6 +782,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="upscalers\dlssd\DLSSDFeature_Dx11.cpp" />
     <ClCompile Include="upscalers\dlssd\DLSSDFeature_Dx12.cpp" />
     <ClCompile Include="upscalers\fsrd\FSRDFeatureDx12.cpp" />
+    <ClCompile Include="upscalers\fsrd\FsrdProbe.cpp" />
     <ClCompile Include="upscalers\dlssd\DLSSDFeature_Vk.cpp" />
     <ClCompile Include="upscalers\dlss\DLSSFeature.cpp" />
     <ClCompile Include="upscalers\dlss\DLSSFeature_Dx11.cpp" />
