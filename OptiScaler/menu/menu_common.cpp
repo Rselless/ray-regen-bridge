@@ -2774,6 +2774,17 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                            "All specular: everything through the roughness aware specular denoiser\n"
                            "Roughness weighted: smooth surfaces specular (sharper reflections), rough ones by albedo");
 
+            const char* signalTypes[] = { "Indirect (hit distance)", "Direct (no hit distance)" };
+            int signalType = std::clamp(config->FsrdSignalType.value_or_default(), 0, 1);
+
+            if (ImGui::Combo("Signal Type", &signalType, signalTypes, IM_ARRAYSIZE(signalTypes)))
+                config->FsrdSignalType = signalType;
+
+            ShowHelpMarker("Which FSR Ray Regeneration signals the game's image is denoised as\n"
+                           "Indirect: uses the game's reflection hit distance (Diffuse Hit Distance for diffuse)\n"
+                           "Direct: no hit distance, Diffuse Hit Distance and Spec Hit Distance Scale unused\n"
+                           "Changing it recreates the denoiser (history starts over)");
+
             float hitDistance = config->FsrdDiffuseHitDistance.value_or_default();
             if (ImGui::SliderFloat("Diffuse Hit Distance", &hitDistance, 0.1f, 100.0f, "%.1f",
                                    ImGuiSliderFlags_Logarithmic))
@@ -2917,6 +2928,14 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                     config->FsrdDebugView = debugView;
 
                 ShowHelpMarker("FSR Ray Regeneration's debug panels (input signals and denoised output)");
+
+                bool validation = config->FsrdValidation.value_or_default();
+                if (ImGui::Checkbox("Denoiser validation", &validation))
+                    config->FsrdValidation = validation;
+
+                ShowHelpMarker("Recreates the denoiser with AMD's input validation.\n"
+                               "Problems with what FSRD sends are written to OptiScaler.log\n"
+                               "('FSRD validation' lines). Slower. Not saved to the ini.");
 
                 bool roughnessOverride = config->FsrdRoughnessOverrideEnabled.value_or_default();
                 if (ImGui::Checkbox("Override Roughness", &roughnessOverride))

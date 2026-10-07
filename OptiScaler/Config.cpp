@@ -418,6 +418,10 @@ bool Config::Reload(std::filesystem::path iniPath)
                 FsrdParticleLayer.set_from_config(setting);
 
             FsrdDiagnostics.set_from_config(readBool("FSRD", "Diagnostics"));
+
+            if (auto setting = readInt("FSRD", "SignalType"); setting.has_value() && setting >= 0 && setting <= 1)
+                FsrdSignalType.set_from_config(setting);
+
             FsrdStabilityBias.set_from_config(readFloat("FSRD", "StabilityBias"));
             FsrdRadianceClipStdK.set_from_config(readFloat("FSRD", "RadianceClipStdK"));
             FsrdKernelRelaxation.set_from_config(readFloat("FSRD", "KernelRelaxation"));
@@ -1253,6 +1257,7 @@ bool Config::SaveIni()
         ini.SetValue("FSRD", "SentinelMode", GetIntValue(Instance()->FsrdSentinelMode.value_for_config()).c_str());
         ini.SetValue("FSRD", "ParticleLayer", GetIntValue(Instance()->FsrdParticleLayer.value_for_config()).c_str());
         ini.SetValue("FSRD", "Diagnostics", GetBoolValue(Instance()->FsrdDiagnostics.value_for_config()).c_str());
+        ini.SetValue("FSRD", "SignalType", GetIntValue(Instance()->FsrdSignalType.value_for_config()).c_str());
         ini.SetValue("FSRD", "StabilityBias",
                      GetFloatValue(Instance()->FsrdStabilityBias.value_for_config()).c_str());
         ini.SetValue("FSRD", "RadianceClipStdK",

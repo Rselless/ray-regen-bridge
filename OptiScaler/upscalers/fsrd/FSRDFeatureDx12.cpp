@@ -15,6 +15,9 @@
 #include "ffx_denoiser_compat.h"
 #include "FsrdUtil.h"
 
+#include <mutex>
+#include <unordered_set>
+
 using Fsrd::Barriers;
 using Fsrd::CreateScratchTexture;
 
@@ -233,9 +236,11 @@ bool FSRDFeatureDx12::CreateDenoiserContext()
     createDesc.header.pNext = &backendDesc.header;
     createDesc.version = FFX_DENOISER_VERSION;
     createDesc.maxRenderSize = { _maxRenderWidth, _maxRenderHeight };
-    createDesc.signalFlags = FFX_DENOISER_SIGNAL_INDIRECT_DIFFUSE | FFX_DENOISER_SIGNAL_INDIRECT_SPECULAR;
+    createDesc.signalFlags = _directSignals
+                                 ? FFX_DENOISER_SIGNAL_DIRECT_DIFFUSE | FFX_DENOISER_SIGNAL_DIRECT_SPECULAR
+                                 : FFX_DENOISER_SIGNAL_INDIRECT_DIFFUSE | FFX_DENOISER_SIGNAL_INDIRECT_SPECULAR;
     createDesc.checkerboardSignalFlags = 0;
-    createDesc.flags = _debugView ? FFX_DENOISER_ENABLE_DEBUGGING : 0;
+    createDesc.flags = (_debugView ? FFX_DENOISER_ENABLE_DEBUGGING : 0) | (_validation ? FFX_DENOISER_ENABLE_VALIDATION : 0);
 
     ffxReturnCode_t result;
 
@@ -252,8 +257,21 @@ bool FSRDFeatureDx12::CreateDenoiserContext()
         return false;
     }
 
-    LOG_INFO("FSR Ray Regeneration context created, max render size: {}x{}, debug view: {}", _maxRenderWidth,
-             _maxRenderHeight, _debugView);
+    LOG_INFO("FSR Ray Regeneration context created, max render size: {}x{}, signals: {}, debug view: {}, "
+             "validation: {}",
+             _maxRenderWidth, _maxRenderHeight, _directSignals ? "direct" : "indirect", _debugView, _validation);
+
+    if (_validation)
+    {
+        // Validation messages come through the global debug callback
+        ffxConfigureDescGlobalDebug1 debugDesc {};
+        debugDesc.header.type = FFX_API_CONFIGURE_DESC_TYPE_GLOBALDEBUG1;
+        debugDesc.fpMessage = &ValidationMessage;
+        debugDesc.debugLevel = FFX_API_CONFIGURE_GLOBALDEBUG_LEVEL_VERBOSE;
+
+        auto debugResult = FfxApiProxy::D3D12_Configure(&_denoiserContext, &debugDesc.header);
+        LOG_INFO("Denoiser validation messages hooked: {}", FfxApiProxy::ReturnCodeToString(debugResult));
+    }
 
     if (_debugView)
     {
@@ -303,17 +321,47 @@ bool FSRDFeatureDx12::CreateDenoiserContext()
     return true;
 }
 
-void FSRDFeatureDx12::UpdateDebugView()
+void FSRDFeatureDx12::ValidationMessage(uint32_t type, const wchar_t* message)
 {
-    // The debug view needs a context created with FFX_DENOISER_ENABLE_DEBUGGING, so switching it from the menu
-    // creates a new context; the old one is kept until the GPU is done with it
-    const bool debugView = Config::Instance()->FsrdDebugView.value_or_default();
+    // Validation can repeat the same message every frame: each distinct one is logged once, up to a limit
+    static std::mutex mutex;
+    static std::unordered_set<std::wstring> seen;
+    constexpr size_t MaxMessages = 200;
 
-    if (debugView == _debugView || !_denoiserContextCreated || _denoiserDisabled)
+    std::scoped_lock lock(mutex);
+
+    if (message == nullptr || seen.size() >= MaxMessages || !seen.insert(message).second)
         return;
+
+    const auto text = wstring_to_string(std::wstring(message));
+
+    if (type == FFX_API_MESSAGE_TYPE_ERROR)
+        LOG_ERROR("FSRD validation: {}", text);
+    else if (type == FFX_API_MESSAGE_TYPE_WARNING)
+        LOG_WARN("FSRD validation: {}", text);
+    else
+        LOG_INFO("FSRD validation: {}", text);
+}
+
+void FSRDFeatureDx12::UpdateContextOptions()
+{
+    // Debug view, validation and the signal types are all fixed at context creation, so changing one from the menu
+    // creates a new context; the old one is kept until the GPU is done with it
+    auto* config = Config::Instance();
+    const bool debugView = config->FsrdDebugView.value_or_default();
+    const bool validation = config->FsrdValidation.value_or_default();
+    const bool directSignals = config->FsrdSignalType.value_or_default() == 1;
+
+    if ((debugView == _debugView && validation == _validation && directSignals == _directSignals) ||
+        !_denoiserContextCreated || _denoiserDisabled)
+    {
+        return;
+    }
 
     RetireDenoiserContext();
     _debugView = debugView;
+    _validation = validation;
+    _directSignals = directSignals;
 
     for (auto& sent : _tuningSent)
         sent = false;
@@ -321,7 +369,7 @@ void FSRDFeatureDx12::UpdateDebugView()
     if (!CreateDenoiserContext())
     {
         _denoiserFailures = MaxDenoiserFailures;
-        DisableDenoiserOnFailure("Can't recreate the denoiser context for the debug view");
+        DisableDenoiserOnFailure("Can't recreate the denoiser context for the new options");
     }
 }
 
@@ -568,6 +616,8 @@ bool FSRDFeatureDx12::InitInternal(ID3D12GraphicsCommandList* InCommandList, NVS
         return true;
 
     _debugView = Config::Instance()->FsrdDebugView.value_or_default();
+    _validation = Config::Instance()->FsrdValidation.value_or_default();
+    _directSignals = Config::Instance()->FsrdSignalType.value_or_default() == 1;
 
     // Scratch and the denoiser context start at the render size the feature was created with (it follows the
     // game's output resolution and upscaling mode); a frame that renders larger grows them (ResizeForRenderSize)
@@ -783,20 +833,39 @@ bool FSRDFeatureDx12::RunDenoiser(ID3D12GraphicsCommandList* InCommandList, NVSD
     const auto read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     const auto write = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
-    ffxDispatchDescDenoiserIndirectSpecular specularDesc {};
-    specularDesc.header.type = FFX_API_DISPATCH_DESC_TYPE_DENOISER_INDIRECT_SPECULAR;
-    specularDesc.signal.input = ffxApiGetResourceDX12(_specularIn, FFX_API_RESOURCE_STATE_COMPUTE_READ);
-    specularDesc.signal.output = ffxApiGetResourceDX12(_specularOut, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
+    // Same signal resources either way; the context was created for indirect (hit distance in A) or direct (A
+    // ignored) signals, and the matching descs must be chained
+    FfxApiDenoiserSignal diffuseSignal {};
+    diffuseSignal.input = ffxApiGetResourceDX12(_diffuseIn, FFX_API_RESOURCE_STATE_COMPUTE_READ);
+    diffuseSignal.output = ffxApiGetResourceDX12(_diffuseOut, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
 
-    ffxDispatchDescDenoiserIndirectDiffuse diffuseDesc {};
-    diffuseDesc.header.type = FFX_API_DISPATCH_DESC_TYPE_DENOISER_INDIRECT_DIFFUSE;
-    diffuseDesc.header.pNext = &specularDesc.header;
-    diffuseDesc.signal.input = ffxApiGetResourceDX12(_diffuseIn, FFX_API_RESOURCE_STATE_COMPUTE_READ);
-    diffuseDesc.signal.output = ffxApiGetResourceDX12(_diffuseOut, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
+    FfxApiDenoiserSignal specularSignal {};
+    specularSignal.input = ffxApiGetResourceDX12(_specularIn, FFX_API_RESOURCE_STATE_COMPUTE_READ);
+    specularSignal.output = ffxApiGetResourceDX12(_specularOut, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    ffxDispatchDescDenoiserIndirectDiffuse indirectDiffuseDesc {};
+    indirectDiffuseDesc.header.type = FFX_API_DISPATCH_DESC_TYPE_DENOISER_INDIRECT_DIFFUSE;
+    indirectDiffuseDesc.signal = diffuseSignal;
+
+    ffxDispatchDescDenoiserIndirectSpecular indirectSpecularDesc {};
+    indirectSpecularDesc.header.type = FFX_API_DISPATCH_DESC_TYPE_DENOISER_INDIRECT_SPECULAR;
+    indirectSpecularDesc.signal = specularSignal;
+
+    ffxDispatchDescDenoiserDirectDiffuse directDiffuseDesc {};
+    directDiffuseDesc.header.type = FFX_API_DISPATCH_DESC_TYPE_DENOISER_DIRECT_DIFFUSE;
+    directDiffuseDesc.signal = diffuseSignal;
+
+    ffxDispatchDescDenoiserDirectSpecular directSpecularDesc {};
+    directSpecularDesc.header.type = FFX_API_DISPATCH_DESC_TYPE_DENOISER_DIRECT_SPECULAR;
+    directSpecularDesc.signal = specularSignal;
+
+    ffxDispatchDescHeader* diffuseHeader = _directSignals ? &directDiffuseDesc.header : &indirectDiffuseDesc.header;
+    ffxDispatchDescHeader* specularHeader = _directSignals ? &directSpecularDesc.header : &indirectSpecularDesc.header;
+    diffuseHeader->pNext = specularHeader;
 
     ffxDispatchDescDenoiser dispatchDesc {};
     dispatchDesc.header.type = FFX_API_DISPATCH_DESC_TYPE_DENOISER;
-    dispatchDesc.header.pNext = &diffuseDesc.header;
+    dispatchDesc.header.pNext = diffuseHeader;
     dispatchDesc.commandList = InCommandList;
 
     dispatchDesc.linearDepth = ffxApiGetResourceDX12(_linearDepth, FFX_API_RESOURCE_STATE_COMPUTE_READ);
@@ -856,7 +925,7 @@ bool FSRDFeatureDx12::RunDenoiser(ID3D12GraphicsCommandList* InCommandList, NVSD
         debugDesc.output = ffxApiGetResourceDX12(_composedColor, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
         debugDesc.outputSize = { (uint32_t) composedDesc.Width, composedDesc.Height };
         debugDesc.mode = FFX_API_DENOISER_DEBUG_VIEW_MODE_OVERVIEW;
-        specularDesc.header.pNext = &debugDesc.header;
+        specularHeader->pNext = &debugDesc.header;
 
         Barriers(InCommandList, { { _composedColor, read, write } });
     }
@@ -1070,7 +1139,7 @@ bool FSRDFeatureDx12::EvaluateInternal(ID3D12GraphicsCommandList* InCommandList,
         }
     }
 
-    UpdateDebugView();
+    UpdateContextOptions();
 
     // Bypass: the game's color with the particle layer over it, so an A/B in steam is fair
     if (composed == nullptr && bypass)

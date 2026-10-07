@@ -39,8 +39,10 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     bool _roughnessPacked = false;
     bool _hwDepth = false;
 
-    // [FSRD] DebugView, needs a context created with debugging: switching it recreates the context
-    bool _debugView = false;
+    // Context creation options, switching one from the menu recreates the context (UpdateContextOptions)
+    bool _debugView = false;     // [FSRD] DebugView: FFX_DENOISER_ENABLE_DEBUGGING
+    bool _validation = false;    // FFX_DENOISER_ENABLE_VALIDATION, messages to the log
+    bool _directSignals = false; // [FSRD] SignalType 1: direct diffuse/specular instead of indirect
 
     // Last frame's menu modes, a change resets the history or is logged
     int _lastSplitMode = -1;
@@ -111,7 +113,8 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     };
 
     bool CreateDenoiserContext();
-    void UpdateDebugView();
+    void UpdateContextOptions();
+    static void ValidationMessage(uint32_t type, const wchar_t* message);
     bool CreateScratchResources();
     bool ResizeForRenderSize(unsigned int renderWidth, unsigned int renderHeight);
     std::array<ID3D12Resource**, 11> ScratchResources();

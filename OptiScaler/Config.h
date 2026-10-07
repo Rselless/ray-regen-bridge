@@ -307,6 +307,10 @@ class Config
     CustomOptional<int> FsrdParticleLayer { 1 };
     // Periodic probe log of the inputs (hit distance, depth, normals, albedos) outside captures
     CustomOptional<bool> FsrdDiagnostics { false };
+    // Denoiser signal types: 0 = indirect diffuse/specular (with hit distance), 1 = direct (no hit distance)
+    CustomOptional<int> FsrdSignalType { 0 };
+    // Diagnostic, menu only: create the denoiser with FFX_DENOISER_ENABLE_VALIDATION, messages go to the log
+    CustomOptional<bool> FsrdValidation { false };
     // Diagnostic, menu only: replace the game's roughness with a constant
     CustomOptional<bool> FsrdRoughnessOverrideEnabled { false };
     // Diagnostic, menu only: skip the denoiser and upscale the game's color, for A/B in the same frame
