@@ -2866,9 +2866,10 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                                        ImGuiSliderFlags_Logarithmic))
                     config->FsrdMaxRadiance = maxRadiance;
 
-                ShowHelpMarker("Highest radiance the denoiser keeps\n"
+                ShowHelpMarker("Highest radiance the denoiser keeps (default 100)\n"
                                "Signals are divided by albedo, so dark surfaces and fog get high values;\n"
-                               "too low a value clamps them (fog disappearing, dark outlines)");
+                               "too high lets them spread into a flat glow over bare textures,\n"
+                               "too low clamps them (fog disappearing, dark outlines)");
             }
 
             ImGui::PopItemWidth();

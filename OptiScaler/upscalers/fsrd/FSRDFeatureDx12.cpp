@@ -53,6 +53,9 @@ constexpr DXGI_FORMAT ScratchFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
 constexpr float SkyDepth = 60000.0f;
 constexpr float SkyDepthBound = 50000.0f;
 
+// [FSRD] MaxRadiance when the ini leaves it on auto (the denoiser's own default is 65504)
+constexpr float DefaultMaxRadiance = 100.0f;
+
 // Disable the denoiser for the session after this many failures, upscaling keeps running
 constexpr int MaxDenoiserFailures = 3;
 
@@ -311,16 +314,21 @@ bool FSRDFeatureDx12::CreateDenoiserContext()
         FfxApiProxy::D3D12_Configure(&_denoiserContext, &configureDesc.header);
     }
 
-    // Show the denoiser's defaults in the menu for the values the user didn't set
+    // Fill the values the user didn't set: our own default where we have one (sent by ApplyTuning), otherwise the
+    // denoiser's (only shown in the menu)
     struct
     {
         CustomOptional<float, NoDefault>* option;
         FfxApiConfigureDenoiserKey key;
-    } tunables[] = { { &Config::Instance()->FsrdStabilityBias, FFX_API_CONFIGURE_DENOISER_KEY_STABILITY_BIAS },
-                     { &Config::Instance()->FsrdRadianceClipStdK, FFX_API_CONFIGURE_DENOISER_KEY_RADIANCE_CLIP_STD_K },
-                     { &Config::Instance()->FsrdKernelRelaxation,
-                       FFX_API_CONFIGURE_DENOISER_KEY_GAUSSIAN_KERNEL_RELAXATION },
-                     { &Config::Instance()->FsrdMaxRadiance, FFX_API_CONFIGURE_DENOISER_KEY_MAX_RADIANCE } };
+        float bridgeDefault; // negative: keep the denoiser's default
+    } tunables[] = {
+        { &Config::Instance()->FsrdStabilityBias, FFX_API_CONFIGURE_DENOISER_KEY_STABILITY_BIAS, -1.0f },
+        { &Config::Instance()->FsrdRadianceClipStdK, FFX_API_CONFIGURE_DENOISER_KEY_RADIANCE_CLIP_STD_K, -1.0f },
+        { &Config::Instance()->FsrdKernelRelaxation, FFX_API_CONFIGURE_DENOISER_KEY_GAUSSIAN_KERNEL_RELAXATION, -1.0f },
+        // 65504 lets fog and light over dark albedo (color / albedo) grow huge, the denoiser spreads them into a flat
+        // glow and remodulation leaves bare albedo; 100 is also what Crimson Desert sets for its own signals
+        { &Config::Instance()->FsrdMaxRadiance, FFX_API_CONFIGURE_DENOISER_KEY_MAX_RADIANCE, DefaultMaxRadiance },
+    };
 
     for (auto& tunable : tunables)
     {
@@ -332,13 +340,19 @@ bool FSRDFeatureDx12::CreateDenoiserContext()
         queryDesc.count = 1;
         queryDesc.data = &value;
 
-        if (FfxApiProxy::D3D12_Query(&_denoiserContext, &queryDesc.header) == FFX_API_RETURN_OK)
-        {
+        bool known = FfxApiProxy::D3D12_Query(&_denoiserContext, &queryDesc.header) == FFX_API_RETURN_OK;
+
+        if (known)
             LOG_INFO("Denoiser default for key {}: {}", (int) tunable.key, value);
 
-            if (!tunable.option->has_value())
-                tunable.option->set_volatile_value(value);
+        if (tunable.bridgeDefault >= 0.0f)
+        {
+            value = tunable.bridgeDefault;
+            known = true;
         }
+
+        if (known && !tunable.option->has_value())
+            tunable.option->set_volatile_value(value);
     }
 
     _denoiserContextCreated = true;

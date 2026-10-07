@@ -49,6 +49,7 @@ Seção `[FSRD]` do `OptiScaler.ini`; a maioria também aparece no menu do OptiS
 | `DiffuseHitDistance` | `10.0` | Distância fixa dos raios difusos, que o DLSS-RR não envia |
 | `SpecHitDistanceScale` | `1.0` | Multiplicador da distância dos reflexos enviada pelo jogo |
 | `DebugView` | `false` | Mostra a tela de depuração do denoiser no lugar da imagem |
+| `MaxRadiance` | `100` | Teto do sinal do denoiser; sem ele (65504, padrão da AMD) a névoa e a luz sobre superfícies escuras viram um brilho chapado |
 | `StabilityBias`, `RadianceClipStdK`, `KernelRelaxation` | padrão da AMD | Ajuste fino do denoiser |
 
 ## Limitações
