@@ -9,6 +9,7 @@
 #include "proxies/FfxApi_Proxy.h"
 
 #include "FG/FfxApi_Dx12_FG.h"
+#include "FfxDenoiserLog.h"
 
 #include "ffx_upscale.h"
 #include "dx12/ffx_api_dx12.h"
@@ -224,6 +225,15 @@ ffxReturnCode_t ffxCreateContext_Dx12(ffxContext* context, ffxCreateContextDescH
         return result;
     }
 
+    // Game's own denoiser (FSR Ray Regeneration): passed through, only logged
+    if (FfxDenoiserLog::IsDenoiserChain(desc))
+    {
+        ScopedSkipHeapCapture skipHeapCapture {};
+        auto result = FfxApiProxy::D3D12_CreateContext(context, desc, memCb);
+        FfxDenoiserLog::LogCreate(desc, result, *context);
+        return result;
+    }
+
     bool upscaleContext = false;
     ffxApiHeader* header = desc;
     ffxCreateContextDescUpscale* createDesc = nullptr;
@@ -376,6 +386,14 @@ ffxReturnCode_t ffxConfigure_Dx12(ffxContext* context, ffxConfigureDescHeader* d
         return result;
     }
 
+    // Game's own denoiser: always passed through, without hot swapping the calls below would be dropped
+    if (FfxDenoiserLog::IsDenoiserChain(desc))
+    {
+        auto result = FfxApiProxy::D3D12_Configure(context, desc);
+        FfxDenoiserLog::LogConfigure(desc, result);
+        return result;
+    }
+
     if (desc->type == FFX_API_CONFIGURE_DESC_TYPE_UPSCALE_KEYVALUE)
     {
 
@@ -414,6 +432,15 @@ ffxReturnCode_t ffxQuery_Dx12(ffxContext* context, ffxQueryDescHeader* desc)
         if (result == PASSTHRU_RETURN_CODE)
             return FfxApiProxy::D3D12_Query(context, desc);
 
+        return result;
+    }
+
+    // Game's own denoiser: always passed through, without hot swapping the call would be dropped and its outputs
+    // left unset (version queries have a general header and keep the handling below)
+    if (FfxDenoiserLog::IsDenoiserChain(desc))
+    {
+        auto result = FfxApiProxy::D3D12_Query(context, desc);
+        FfxDenoiserLog::LogQuery(desc, result);
         return result;
     }
 
@@ -568,6 +595,14 @@ ffxReturnCode_t ffxDispatch_Dx12(ffxContext* context, ffxDispatchDescHeader* des
         if (result == PASSTHRU_RETURN_CODE)
             return FfxApiProxy::D3D12_Dispatch(context, desc);
 
+        return result;
+    }
+
+    // Game's own denoiser: passed through, only logged
+    if (FfxDenoiserLog::IsDenoiserChain(desc))
+    {
+        auto result = FfxApiProxy::D3D12_Dispatch(context, desc);
+        FfxDenoiserLog::LogDispatch(desc, result);
         return result;
     }
 
