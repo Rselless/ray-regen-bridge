@@ -1,6 +1,8 @@
-# fsrd-cyberpunk
+# Ray Regen Bridge
 
-**FSR Ray Regeneration no lugar do DLSS Ray Reconstruction**, para placas AMD, via [OptiScaler](https://github.com/optiscaler/OptiScaler).
+**Ray Reconstruction para placas AMD, via FSR Ray Regeneration**, num fork do [OptiScaler](https://github.com/optiscaler/OptiScaler).
+
+> Nome antigo: `fsrd-cyberpunk`. No código e no `OptiScaler.ini` a feature continua chamada **FSRD** (classe `FSRDFeatureDx12`, seção `[FSRD]`).
 
 Jogos como Cyberpunk 2077 só oferecem Ray Reconstruction (DLSS-RR) para placas NVIDIA. Este fork do OptiScaler intercepta esse pedido e o atende com o denoiser da AMD (FSR Ray Regeneration, `amd_fidelityfx_denoiser_dx12.dll`), seguido do upscale FSR que o OptiScaler já tinha.
 
@@ -58,3 +60,5 @@ Seção `[FSRD]` do `OptiScaler.ini`; a maioria também aparece no menu do OptiS
 ## Créditos e licença
 
 Baseado no [OptiScaler](https://github.com/optiscaler/OptiScaler) (snapshot do commit `6b911548`); a documentação original está lá. Usa o [AMD FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK). Licença GPL-3.0, a mesma do OptiScaler (ver `LICENSE`).
+
+Projeto independente, sem afiliação com AMD, NVIDIA ou CD PROJEKT RED. AMD, FSR e FidelityFX são marcas da Advanced Micro Devices, Inc.; NVIDIA e DLSS são marcas da NVIDIA Corporation; Cyberpunk 2077 é marca da CD PROJEKT S.A. Os nomes aparecem só para descrever compatibilidade.

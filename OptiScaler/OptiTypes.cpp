@@ -83,7 +83,7 @@ std::string UpscalerDisplayName(Upscaler upscaler, API api)
         return "DLSSD";
 
     case Upscaler::FSRD:
-        return "FSR Ray Regeneration";
+        return "Ray Regen Bridge";
     }
 
     return "????";

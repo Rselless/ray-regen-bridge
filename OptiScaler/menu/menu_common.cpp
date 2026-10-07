@@ -1652,26 +1652,26 @@ void MenuCommon::RenderProbeCaptureOverlay(RenderMenuContext& ctx)
 
         if (fsrd->CapturePending() && fsrd->CaptureCountdown() > 0.0f)
         {
-            ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)), "FSRD capture '%s' starts in %.1f s",
+            ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)), "RRB capture '%s' starts in %.1f s",
                                fsrd->CaptureLabel(), fsrd->CaptureCountdown());
         }
         else if (fsrd->CapturePending())
         {
             // Start time passed but no FSRD frame picked it up: the denoiser isn't running
             ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.5f, 0.f, 1.f)),
-                               "FSRD capture '%s' waiting: no denoiser frames (Ray Reconstruction off?)",
+                               "RRB capture '%s' waiting: no denoiser frames (Ray Reconstruction off?)",
                                fsrd->CaptureLabel());
         }
         else if (const float remaining = fsrd->CaptureRemaining(); remaining > 0.0f)
         {
             ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.25f, 0.25f, 1.f)), "REC");
             ImGui::SameLine();
-            ImGui::TextColored(toneMapColor(ImVec4(0.3f, 0.8f, 1.f, 1.f)), "FSRD capture #%d '%s': %.1f s",
+            ImGui::TextColored(toneMapColor(ImVec4(0.3f, 0.8f, 1.f, 1.f)), "RRB capture #%d '%s': %.1f s",
                                fsrd->CaptureCount(), fsrd->CaptureLabel(), remaining);
         }
         else
         {
-            ImGui::TextColored(toneMapColor(ImVec4(0.f, 1.f, 0.25f, 1.f)), "FSRD capture #%d '%s' done",
+            ImGui::TextColored(toneMapColor(ImVec4(0.f, 1.f, 0.25f, 1.f)), "RRB capture #%d '%s' done",
                                fsrd->CaptureCount(), fsrd->CaptureLabel());
         }
     }
@@ -2750,7 +2750,7 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
         // FSRD -----------------
         if (currentFeature->GetUpscalerType() == Upscaler::FSRD)
         {
-            ImGui::SeparatorText("FSR Ray Regeneration");
+            ImGui::SeparatorText("Ray Regen Bridge");
 
             if (auto fsrd = dynamic_cast<FSRDFeatureDx12*>(currentFeature); fsrd != nullptr)
             {
@@ -2934,7 +2934,7 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                     config->FsrdValidation = validation;
 
                 ShowHelpMarker("Recreates the denoiser with AMD's input validation.\n"
-                               "Problems with what FSRD sends are written to OptiScaler.log\n"
+                               "Problems with what Ray Regen Bridge sends are written to OptiScaler.log\n"
                                "('FSRD validation' lines). Slower. Not saved to the ini.");
 
                 bool roughnessOverride = config->FsrdRoughnessOverrideEnabled.value_or_default();
