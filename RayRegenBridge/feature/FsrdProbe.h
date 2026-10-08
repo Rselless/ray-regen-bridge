@@ -3,7 +3,7 @@
 // captures started from the menu or every ~2 s with [FSRD] Diagnostics. fsrd_probe.hlsl reads them through SRVs
 // (game resources keep their state) into a small texture, which is copied into a readback buffer and logged two
 // rounds later, when that frame's GPU work is done.
-#include <shaders/fsrd/FsrdPass_Dx12.h>
+#include "FsrdPass_Dx12.h"
 #include <atomic>
 #include <chrono>
 #include <memory>

@@ -9,7 +9,7 @@
 #include "proxies/FfxApi_Proxy.h"
 
 #include "FG/FfxApi_Dx12_FG.h"
-#include "FfxDenoiserLog.h"
+#include <RayRegenBridge/native/FfxDenoiserLog.h>
 
 #include "ffx_upscale.h"
 #include "dx12/ffx_api_dx12.h"

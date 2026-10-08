@@ -1,11 +1,11 @@
 # Compiles the Ray Regen Bridge (FSRD) compute shaders and writes <name>_Shader.h next to them, in the same format
 # as OptiScaler/shaders/shader_tools/create_header.py.
 #
-#   tools\build_shaders.ps1                    all FSRD shaders
-#   tools\build_shaders.ps1 fsrd_compose ...   only these
+#   RayRegenBridge\tools\build_shaders.ps1                    all FSRD shaders
+#   RayRegenBridge\tools\build_shaders.ps1 fsrd_compose ...   only these
 
-$repo = Split-Path $PSScriptRoot -Parent
-$dir = Join-Path $repo 'OptiScaler\shaders\fsrd\precompile'
+$repo = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+$dir = Join-Path $repo 'RayRegenBridge\shaders'
 $dxc = Join-Path $repo 'OptiScaler\shaders\shader_tools\dxc.exe'
 
 $names = if ($args.Count -gt 0) { $args } else {

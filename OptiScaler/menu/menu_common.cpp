@@ -34,7 +34,7 @@
 #include <memory>
 #include <type_traits>
 #include <misc/IdentifyGpu.h>
-#include <upscalers/fsrd/FSRDFeatureDx12.h>
+#include <RayRegenBridge/feature/FSRDFeatureDx12.h>
 #include <hooks/Xell_Hooks.h>
 #include <low_latency/input/input_common.h>
 

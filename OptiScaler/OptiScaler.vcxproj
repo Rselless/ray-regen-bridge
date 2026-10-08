@@ -112,17 +112,17 @@
     <LibraryPath>$(SolutionDir)\external\xess\lib;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <IncludePath>$(ProjectDir);$(ProjectDir)include\;$(SolutionDir)external\vulkan\include;$(SolutionDir)external\nvngx_dlss_sdk;$(SolutionDir)external\xess\inc\xess;$(SolutionDir)external\xess\inc\xell;$(SolutionDir)external\xess\inc\xess_fg;$(SolutionDir)external\FidelityFX-SDK\ffx-api\include\ffx_api;$(SolutionDir)external\simpleini;$(SolutionDir)external\unordered_dense\include;$(SolutionDir)external\spdlog\include;$(SolutionDir)external\freetype;$(SolutionDir)external\streamline;$(SolutionDir)external\streamline1;$(SolutionDir)external\nvapi;$(SolutionDir)external\nlohmann;$(SolutionDir)external\fakenvapi;$(SolutionDir)external\magic_enum\include\magic_enum;$(SolutionDir)external\AntiLag2-SDK;$(SolutionDir)external\latencyflex;$(IncludePath)</IncludePath>
+    <IncludePath>$(ProjectDir);$(ProjectDir)include\;$(SolutionDir);$(SolutionDir)external\vulkan\include;$(SolutionDir)external\nvngx_dlss_sdk;$(SolutionDir)external\xess\inc\xess;$(SolutionDir)external\xess\inc\xell;$(SolutionDir)external\xess\inc\xess_fg;$(SolutionDir)external\FidelityFX-SDK\ffx-api\include\ffx_api;$(SolutionDir)external\simpleini;$(SolutionDir)external\unordered_dense\include;$(SolutionDir)external\spdlog\include;$(SolutionDir)external\freetype;$(SolutionDir)external\streamline;$(SolutionDir)external\streamline1;$(SolutionDir)external\nvapi;$(SolutionDir)external\nlohmann;$(SolutionDir)external\fakenvapi;$(SolutionDir)external\magic_enum\include\magic_enum;$(SolutionDir)external\AntiLag2-SDK;$(SolutionDir)external\latencyflex;$(IncludePath)</IncludePath>
     <LibraryPath>$(ProjectDir)library\fsr2;$(ProjectDir)library\fsr2_212;$(ProjectDir)library\fsr31;$(ProjectDir)library\vulkan;$(ProjectDir)library\d3dx;$(ProjectDir)library\detours;$(SolutionDir)external\xess\lib;$(SolutionDir)external\freetype;$(LibraryPath)</LibraryPath>
     <IntDir>.\x64\Debug\</IntDir>
     <TargetExt>.dll</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <IncludePath>$(ProjectDir);$(ProjectDir)include\;$(SolutionDir)external\vulkan\include;$(SolutionDir)external\nvngx_dlss_sdk;$(SolutionDir)external\xess\inc\xess;$(SolutionDir)external\xess\inc\xell;$(SolutionDir)external\xess\inc\xess_fg;$(SolutionDir)external\FidelityFX-SDK\ffx-api\include\ffx_api;$(SolutionDir)external\simpleini;$(SolutionDir)external\unordered_dense\include;$(SolutionDir)external\spdlog\include;$(SolutionDir)external\freetype;$(SolutionDir)external\streamline;$(SolutionDir)external\streamline1;$(SolutionDir)external\nvapi;$(SolutionDir)external\nlohmann;$(SolutionDir)external\fakenvapi;$(SolutionDir)external\magic_enum\include\magic_enum;$(SolutionDir)external\AntiLag2-SDK;$(SolutionDir)external\latencyflex;$(IncludePath)</IncludePath>
+    <IncludePath>$(ProjectDir);$(ProjectDir)include\;$(SolutionDir);$(SolutionDir)external\vulkan\include;$(SolutionDir)external\nvngx_dlss_sdk;$(SolutionDir)external\xess\inc\xess;$(SolutionDir)external\xess\inc\xell;$(SolutionDir)external\xess\inc\xess_fg;$(SolutionDir)external\FidelityFX-SDK\ffx-api\include\ffx_api;$(SolutionDir)external\simpleini;$(SolutionDir)external\unordered_dense\include;$(SolutionDir)external\spdlog\include;$(SolutionDir)external\freetype;$(SolutionDir)external\streamline;$(SolutionDir)external\streamline1;$(SolutionDir)external\nvapi;$(SolutionDir)external\nlohmann;$(SolutionDir)external\fakenvapi;$(SolutionDir)external\magic_enum\include\magic_enum;$(SolutionDir)external\AntiLag2-SDK;$(SolutionDir)external\latencyflex;$(IncludePath)</IncludePath>
     <LibraryPath>$(ProjectDir)library\fsr2;$(ProjectDir)library\fsr2_212;$(ProjectDir)library\fsr31;$(ProjectDir)library\vulkan;$(ProjectDir)library\d3dx;$(ProjectDir)library\detours;$(SolutionDir)external\xess\lib;$(SolutionDir)external\freetype;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='ReleaseDebug|x64'">
-    <IncludePath>$(ProjectDir);$(ProjectDir)include\;$(SolutionDir)external\vulkan\include;$(SolutionDir)external\nvngx_dlss_sdk;$(SolutionDir)external\xess\inc\xess;$(SolutionDir)external\xess\inc\xell;$(SolutionDir)external\xess\inc\xess_fg;$(SolutionDir)external\FidelityFX-SDK\ffx-api\include\ffx_api;$(SolutionDir)external\simpleini;$(SolutionDir)external\unordered_dense\include;$(SolutionDir)external\spdlog\include;$(SolutionDir)external\freetype;$(SolutionDir)external\streamline;$(SolutionDir)external\streamline1;$(SolutionDir)external\nvapi;$(SolutionDir)external\nlohmann;$(SolutionDir)external\fakenvapi;$(SolutionDir)external\magic_enum\include\magic_enum;$(SolutionDir)external\AntiLag2-SDK;$(SolutionDir)external\latencyflex;$(IncludePath)</IncludePath>
+    <IncludePath>$(ProjectDir);$(ProjectDir)include\;$(SolutionDir);$(SolutionDir)external\vulkan\include;$(SolutionDir)external\nvngx_dlss_sdk;$(SolutionDir)external\xess\inc\xess;$(SolutionDir)external\xess\inc\xell;$(SolutionDir)external\xess\inc\xess_fg;$(SolutionDir)external\FidelityFX-SDK\ffx-api\include\ffx_api;$(SolutionDir)external\simpleini;$(SolutionDir)external\unordered_dense\include;$(SolutionDir)external\spdlog\include;$(SolutionDir)external\freetype;$(SolutionDir)external\streamline;$(SolutionDir)external\streamline1;$(SolutionDir)external\nvapi;$(SolutionDir)external\nlohmann;$(SolutionDir)external\fakenvapi;$(SolutionDir)external\magic_enum\include\magic_enum;$(SolutionDir)external\AntiLag2-SDK;$(SolutionDir)external\latencyflex;$(IncludePath)</IncludePath>
     <LibraryPath>$(ProjectDir)library\fsr2;$(ProjectDir)library\fsr2_212;$(ProjectDir)library\fsr31;$(ProjectDir)library\vulkan;$(ProjectDir)library\d3dx;$(ProjectDir)library\detours;$(SolutionDir)external\xess\lib;$(SolutionDir)external\freetype;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
@@ -513,10 +513,10 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="upscalers\dlssd\DLSSDFeature.h" />
     <ClInclude Include="upscalers\dlssd\DLSSDFeature_Dx11.h" />
     <ClInclude Include="upscalers\dlssd\DLSSDFeature_Dx12.h" />
-    <ClInclude Include="upscalers\fsrd\FSRDFeatureDx12.h" />
-    <ClInclude Include="upscalers\fsrd\ffx_denoiser_compat.h" />
-    <ClInclude Include="upscalers\fsrd\FsrdProbe.h" />
-    <ClInclude Include="upscalers\fsrd\FsrdUtil.h" />
+    <ClInclude Include="..\RayRegenBridge\feature\FSRDFeatureDx12.h" />
+    <ClInclude Include="..\RayRegenBridge\feature\ffx_denoiser_compat.h" />
+    <ClInclude Include="..\RayRegenBridge\feature\FsrdProbe.h" />
+    <ClInclude Include="..\RayRegenBridge\feature\FsrdUtil.h" />
     <ClInclude Include="upscalers\dlssd\DLSSDFeature_Vk.h" />
     <ClInclude Include="upscalers\dlss\DLSSFeature.h" />
     <ClInclude Include="upscalers\dlss\DLSSFeature_Dx11.h" />
@@ -531,7 +531,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="upscalers\ffx\FFXFeature_Dx12.h" />
     <ClInclude Include="upscalers\ffx\FFXFeature_Vk.h" />
     <ClInclude Include="inputs\FfxApi_Dx12.h" />
-    <ClInclude Include="inputs\FfxDenoiserLog.h" />
+    <ClInclude Include="..\RayRegenBridge\native\FfxDenoiserLog.h" />
     <ClInclude Include="inputs\FSR2_Dx12.h" />
     <ClInclude Include="inputs\FSR3_Dx12.h" />
     <ClInclude Include="include\imgui\imconfig.h" />
@@ -586,13 +586,13 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="shaders\bias\Bias_Common.h" />
     <ClInclude Include="shaders\bias\Bias_Dx11.h" />
     <ClInclude Include="shaders\bias\Bias_Dx12.h" />
-    <ClInclude Include="shaders\fsrd\FsrdPass_Dx12.h" />
+    <ClInclude Include="..\RayRegenBridge\feature\FsrdPass_Dx12.h" />
     <ClInclude Include="shaders\bias\precompile\Bias_Shader.h" />
     <ClInclude Include="shaders\bias\precompile\Bias_Shader_Dx11.h" />
-    <ClInclude Include="shaders\fsrd\precompile\fsrd_prepass_Shader.h" />
-    <ClInclude Include="shaders\fsrd\precompile\fsrd_compose_Shader.h" />
-    <ClInclude Include="shaders\fsrd\precompile\fsrd_particles_Shader.h" />
-    <ClInclude Include="shaders\fsrd\precompile\fsrd_probe_Shader.h" />
+    <ClInclude Include="..\RayRegenBridge\shaders\fsrd_prepass_Shader.h" />
+    <ClInclude Include="..\RayRegenBridge\shaders\fsrd_compose_Shader.h" />
+    <ClInclude Include="..\RayRegenBridge\shaders\fsrd_particles_Shader.h" />
+    <ClInclude Include="..\RayRegenBridge\shaders\fsrd_probe_Shader.h" />
     <ClInclude Include="shaders\format_transfer\FT_Common.h" />
     <ClInclude Include="shaders\format_transfer\FT_Dx12.h" />
     <ClInclude Include="shaders\output_scaling\fsr1\FSR_EASU_Shader.h" />
@@ -782,8 +782,8 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="upscalers\dlssd\DLSSDFeature.cpp" />
     <ClCompile Include="upscalers\dlssd\DLSSDFeature_Dx11.cpp" />
     <ClCompile Include="upscalers\dlssd\DLSSDFeature_Dx12.cpp" />
-    <ClCompile Include="upscalers\fsrd\FSRDFeatureDx12.cpp" />
-    <ClCompile Include="upscalers\fsrd\FsrdProbe.cpp" />
+    <ClCompile Include="..\RayRegenBridge\feature\FSRDFeatureDx12.cpp" />
+    <ClCompile Include="..\RayRegenBridge\feature\FsrdProbe.cpp" />
     <ClCompile Include="upscalers\dlssd\DLSSDFeature_Vk.cpp" />
     <ClCompile Include="upscalers\dlss\DLSSFeature.cpp" />
     <ClCompile Include="upscalers\dlss\DLSSFeature_Dx11.cpp" />
@@ -813,7 +813,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="upscalers\IFeature.cpp" />
     <ClCompile Include="upscalers\IFeature_Dx12.cpp" />
     <ClCompile Include="inputs\FfxApi_Dx12.cpp" />
-    <ClCompile Include="inputs\FfxDenoiserLog.cpp" />
+    <ClCompile Include="..\RayRegenBridge\native\FfxDenoiserLog.cpp" />
     <ClCompile Include="inputs\FSR2_Dx12.cpp" />
     <ClCompile Include="inputs\FSR3_Dx12.cpp" />
     <ClCompile Include="hooks\D3D11_Hooks.cpp" />
@@ -867,7 +867,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="scanner\scanner.cpp" />
     <ClCompile Include="shaders\bias\Bias_Dx11.cpp" />
     <ClCompile Include="shaders\bias\Bias_Dx12.cpp" />
-    <ClCompile Include="shaders\fsrd\FsrdPass_Dx12.cpp" />
+    <ClCompile Include="..\RayRegenBridge\feature\FsrdPass_Dx12.cpp" />
     <ClCompile Include="shaders\format_transfer\FT_Dx12.cpp" />
     <ClCompile Include="shaders\output_scaling\OS_Dx11.cpp" />
     <ClCompile Include="shaders\output_scaling\OS_Dx12.cpp" />

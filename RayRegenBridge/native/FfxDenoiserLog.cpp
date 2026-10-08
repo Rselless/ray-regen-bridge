@@ -2,7 +2,7 @@
 #include "FfxDenoiserLog.h"
 
 #include <proxies/FfxApi_Proxy.h>
-#include <upscalers/fsrd/ffx_denoiser_compat.h>
+#include <RayRegenBridge/feature/ffx_denoiser_compat.h>
 
 #include <magic_enum.hpp>
 

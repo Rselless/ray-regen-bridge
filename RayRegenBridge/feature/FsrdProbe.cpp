@@ -3,7 +3,7 @@
 #include "FsrdUtil.h"
 
 #include <Config.h>
-#include <shaders/fsrd/precompile/fsrd_probe_Shader.h>
+#include <RayRegenBridge/shaders/fsrd_probe_Shader.h>
 
 // Screen points (fractions of the render size, same as fsrd_probe.hlsl) and the RGBA32F texels per point that
 // shader writes: (hit, depth, roughness, material), game normals, diffuse albedo, specular albedo

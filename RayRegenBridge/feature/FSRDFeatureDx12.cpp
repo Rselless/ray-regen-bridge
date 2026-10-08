@@ -5,9 +5,9 @@
 #include <Util.h>
 #include <proxies/FfxApi_Proxy.h>
 
-#include <shaders/fsrd/precompile/fsrd_prepass_Shader.h>
-#include <shaders/fsrd/precompile/fsrd_compose_Shader.h>
-#include <shaders/fsrd/precompile/fsrd_particles_Shader.h>
+#include <RayRegenBridge/shaders/fsrd_prepass_Shader.h>
+#include <RayRegenBridge/shaders/fsrd_compose_Shader.h>
+#include <RayRegenBridge/shaders/fsrd_particles_Shader.h>
 
 // FSR Ray Regeneration API (ffx_denoiser.h 1.2.0), wrapped so it builds on the same ffx_api.h OptiScaler already
 // uses -- see ffx_denoiser_compat.h for why the real header can't be included directly. ffxApiGetResourceDX12 comes

@@ -21,26 +21,28 @@ Se alguma etapa falhar, ele volta a só fazer o upscale da cor original. Depois 
 
 ## Estrutura do repositório
 
+Todo o código do Ray Regen Bridge fica em `RayRegenBridge/`, separado do OptiScaler. Em `OptiScaler/` ficam só pequenos ganchos (lista abaixo).
+
 | Pasta | Conteúdo |
 | --- | --- |
-| `OptiScaler/` | Código do OptiScaler com o Ray Regen Bridge (nome do upstream, mantido para facilitar merges) |
-| `OptiScaler/upscalers/fsrd/` | A feature do Ray Regen Bridge |
-| `OptiScaler/shaders/fsrd/` | Shaders do prepass, compose, partículas e sonda |
-| `Launcher/` | Instalador/launcher (`RayRegenBridge.exe`) e perfis por jogo |
-| `tools/` | Scripts: `build_shaders.ps1` recompila os shaders e gera os headers |
+| `RayRegenBridge/feature/` | A feature (`FSRDFeatureDx12`): prepass, denoise, compose e upscale; passes de compute, sonda de diagnóstico e a API do denoiser (`ffx_denoiser_compat.h`) |
+| `RayRegenBridge/shaders/` | Shaders HLSL (prepass, compose, partículas, sonda) e os headers compilados |
+| `RayRegenBridge/native/` | Log do que jogos com Ray Regeneration nativo mandam ao denoiser (`FfxDenoiserLog`) |
+| `RayRegenBridge/launcher/` | Instalador/launcher (`RayRegenBridge.exe`) e perfis por jogo (`profiles.ini`) |
+| `RayRegenBridge/tools/` | `build_shaders.ps1`: recompila os shaders e gera os headers |
+| `OptiScaler/` | OptiScaler (nome e estrutura do upstream, mantidos para facilitar merges) |
 | `external/` | SDKs (FidelityFX, XeSS, Agility SDK...) |
 | `dist/` | Gerado: launcher pronto para usar (fora do git) |
 | `x64/` | Gerado: build do OptiScaler (fora do git) |
 
-## Arquivos principais
+Ganchos no código do OptiScaler:
 
 | Arquivo | O que faz |
 | --- | --- |
-| `OptiScaler/upscalers/fsrd/FSRDFeatureDx12.*` | A feature: prepass, denoise, compose e upscale |
-| `OptiScaler/upscalers/fsrd/ffx_denoiser_compat.h` | API do denoiser compatível com o `ffx_api.h` antigo que o OptiScaler usa |
-| `OptiScaler/shaders/fsrd/` | Shaders de prepass e compose (HLSL e headers pré-compilados) |
-| `OptiScaler/upscalers/FeatureProvider_Dx12.cpp` | Cria o FSRD quando o jogo pede DLSS-RR numa placa sem DLSS |
+| `OptiScaler/upscalers/FeatureProvider_Dx12.cpp` | Cria o Ray Regen Bridge quando o jogo pede DLSS-RR numa placa sem DLSS |
 | `OptiScaler/NVNGX_Parameter.cpp`, `inputs/NVNGX_DLSS_Dx12.cpp` | Fazem o jogo e o Streamline enxergarem o RR como disponível |
+| `OptiScaler/inputs/FfxApi_Dx12.cpp` | Repassa e registra as chamadas do jogo ao denoiser nativo |
+| `OptiScaler/Config.*`, `OptiScaler/menu/menu_common.cpp` | Seção `[FSRD]` do ini e do menu |
 
 ## Compilar e instalar
 
@@ -52,14 +54,14 @@ Se alguma etapa falhar, ele volta a só fazer o upscale da cor original. Depois 
 
 ## Launcher
 
-`Launcher/` gera `dist\RayRegenBridge\RayRegenBridge.exe`, com `profiles.ini` e a pasta `payload\` (OptiScaler e DLLs da AMD) ao lado. Essa pasta é tudo o que precisa ser copiado ou distribuído. Ele:
+`RayRegenBridge/launcher/` gera `dist\RayRegenBridge\RayRegenBridge.exe`, com `profiles.ini` e a pasta `payload\` (OptiScaler e DLLs da AMD) ao lado. Essa pasta é tudo o que precisa ser copiado ou distribuído. Ele:
 
 - acha os jogos da Steam (e pastas adicionadas à mão) e mostra quais têm DLSS Ray Reconstruction (`nvngx_dlssd.dll`);
 - escolhe a pasta do exe e o nome da DLL (`winmm.dll`, `dxgi.dll`...) pelo perfil do jogo ou pelo que o exe importa, e avisa sobre outros mods (ReShade, ASI Loader, outro OptiScaler);
 - instala sem substituir nada do jogo, guarda a lista do que instalou em `RayRegenBridge.installed` e desinstala só isso; na atualização o `OptiScaler.ini` do usuário é mantido;
 - junta `OptiScaler.log` e o ini num `.zip` na Área de Trabalho.
 
-Perfis por jogo ficam em `Launcher/profiles.ini` (nome da DLL, ajustes do ini, avisos). Sem janela: `RayRegenBridge.exe --scan arquivo.txt`, `--install <pasta do jogo>`, `--uninstall <pasta do jogo>`.
+Perfis por jogo ficam em `RayRegenBridge/launcher/profiles.ini` (nome da DLL, ajustes do ini, avisos). Sem janela: `RayRegenBridge.exe --scan arquivo.txt`, `--install <pasta do jogo>`, `--uninstall <pasta do jogo>`.
 
 ## Configuração
 

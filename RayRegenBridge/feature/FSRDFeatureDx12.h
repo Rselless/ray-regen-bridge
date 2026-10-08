@@ -15,7 +15,7 @@
 // Resource keys come from NVIDIA's public nvsdk_ngx_defs_dlssd.h / nvsdk_ngx_helpers_dlssd_d3d.h.
 
 #include <upscalers/ffx/FFXFeature_Dx12.h>
-#include <shaders/fsrd/FsrdPass_Dx12.h>
+#include "FsrdPass_Dx12.h"
 #include "FsrdProbe.h"
 #include <array>
 #include <memory>

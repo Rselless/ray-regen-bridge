@@ -8,7 +8,7 @@
 
 #include "upscalers/dlss/DLSSFeature_Dx12.h"
 #include "upscalers/dlssd/DLSSDFeature_Dx12.h"
-#include "upscalers/fsrd/FSRDFeatureDx12.h"
+#include <RayRegenBridge/feature/FSRDFeatureDx12.h>
 #include "upscalers/fsr2/FSR2Feature_Dx12.h"
 #include "upscalers/fsr2_212/FSR2Feature_Dx12_212.h"
 #include "upscalers/ffx/FFXFeature_Dx12.h"

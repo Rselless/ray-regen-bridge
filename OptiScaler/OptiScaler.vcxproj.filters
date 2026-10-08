@@ -1614,4 +1614,53 @@
     </None>
     <None Include="shaders\magnifier\precompile\Magnifier_Shader_Vk.spv" />
   </ItemGroup>
+  <ItemGroup>
+    <Filter Include="RayRegenBridge">
+      <UniqueIdentifier>{406ce330-9fd3-425e-907d-1b0a13447517}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\RayRegenBridge\feature\FSRDFeatureDx12.h">
+      <Filter>RayRegenBridge</Filter>
+    </ClInclude>
+    <ClInclude Include="..\RayRegenBridge\feature\ffx_denoiser_compat.h">
+      <Filter>RayRegenBridge</Filter>
+    </ClInclude>
+    <ClInclude Include="..\RayRegenBridge\feature\FsrdProbe.h">
+      <Filter>RayRegenBridge</Filter>
+    </ClInclude>
+    <ClInclude Include="..\RayRegenBridge\feature\FsrdUtil.h">
+      <Filter>RayRegenBridge</Filter>
+    </ClInclude>
+    <ClInclude Include="..\RayRegenBridge\feature\FsrdPass_Dx12.h">
+      <Filter>RayRegenBridge</Filter>
+    </ClInclude>
+    <ClInclude Include="..\RayRegenBridge\native\FfxDenoiserLog.h">
+      <Filter>RayRegenBridge</Filter>
+    </ClInclude>
+    <ClInclude Include="..\RayRegenBridge\shaders\fsrd_prepass_Shader.h">
+      <Filter>RayRegenBridge</Filter>
+    </ClInclude>
+    <ClInclude Include="..\RayRegenBridge\shaders\fsrd_compose_Shader.h">
+      <Filter>RayRegenBridge</Filter>
+    </ClInclude>
+    <ClInclude Include="..\RayRegenBridge\shaders\fsrd_particles_Shader.h">
+      <Filter>RayRegenBridge</Filter>
+    </ClInclude>
+    <ClInclude Include="..\RayRegenBridge\shaders\fsrd_probe_Shader.h">
+      <Filter>RayRegenBridge</Filter>
+    </ClInclude>
+    <ClCompile Include="..\RayRegenBridge\feature\FSRDFeatureDx12.cpp">
+      <Filter>RayRegenBridge</Filter>
+    </ClCompile>
+    <ClCompile Include="..\RayRegenBridge\feature\FsrdProbe.cpp">
+      <Filter>RayRegenBridge</Filter>
+    </ClCompile>
+    <ClCompile Include="..\RayRegenBridge\feature\FsrdPass_Dx12.cpp">
+      <Filter>RayRegenBridge</Filter>
+    </ClCompile>
+    <ClCompile Include="..\RayRegenBridge\native\FfxDenoiserLog.cpp">
+      <Filter>RayRegenBridge</Filter>
+    </ClCompile>
+  </ItemGroup>
 </Project>
