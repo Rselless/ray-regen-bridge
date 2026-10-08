@@ -120,8 +120,8 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
 
     color = max(color, 0.0f);
 
-    // Game's specular hit distance: NoHitDistance = ray missed (far), 0 or invalid = no specular ray, the specular
-    // signal is inactive and the whole color goes through the diffuse one
+    // Game's specular hit distance: FarHitDistance and up = ray missed (far), 0 or invalid = no specular ray, the
+    // specular signal is inactive and the whole color goes through the diffuse one
     float specHit = DiffuseHitDistance;
     bool specActive = true;
 
@@ -129,7 +129,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
     {
         const float rawHit = SpecularHitDistance.Load(p);
 
-        if (rawHit >= NoHitDistance)
+        if (rawHit >= FarHitDistance)
             specHit = MaxHitDistance;
         else if (rawHit > 0.0f)
             specHit = min(rawHit * SpecHitScale, MaxHitDistance);

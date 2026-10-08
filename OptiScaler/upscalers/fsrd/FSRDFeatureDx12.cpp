@@ -37,6 +37,7 @@ constexpr const char* RoughnessMode = "DLSS.Roughness.Mode";   // 0 = separate t
 constexpr const char* UseHWDepth = "DLSS.Use.HW.Depth";        // 0 = linear, 1 = HW depth
 constexpr const char* DenoiseMode = "DLSS.Denoise.Mode";
 constexpr const char* ColorBeforeParticles = "DLSSD.ColorBeforeParticles";
+constexpr const char* ColorBeforeTransparency = "DLSSD.ColorBeforeTransparency";
 } // namespace DlssdKeys
 
 // Must match the defines in fsrd_common.hlsli
@@ -45,6 +46,8 @@ constexpr uint32_t FlagHasSpecHitDistance = 0x2;
 constexpr uint32_t FlagDepthInverted = 0x4;
 constexpr uint32_t FlagParticleLayer = 0x8;
 constexpr uint32_t FlagCountSentinels = 0x10;
+constexpr uint32_t FlagLinearDepth = 0x20;
+constexpr uint32_t FlagTransparencyLayer = 0x40;
 
 // Scratch format for the denoiser signals and the packed normals (FFX's preferred signal format)
 constexpr DXGI_FORMAT ScratchFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
@@ -267,6 +270,7 @@ bool FSRDFeatureDx12::CreateDenoiserContext()
              _maxRenderWidth, _maxRenderHeight, _directSignals ? "direct" : "indirect", _debugView, _validation);
 
     {
+        // Expected usage (null context): the per-context query of denoiser 1.2.0 returns a negative total
         FfxApiEffectMemoryUsage usage {};
         ffxQueryDescDenoiserGetGPUMemoryUsage memoryDesc {};
         memoryDesc.header.type = FFX_API_QUERY_DESC_TYPE_DENOISER_GPU_MEMORY_USAGE;
@@ -277,11 +281,10 @@ bool FSRDFeatureDx12::CreateDenoiserContext()
         memoryDesc.flags = createDesc.flags;
         memoryDesc.gpuMemoryUsage = &usage;
 
-        if (FfxApiProxy::D3D12_Query(&_denoiserContext, &memoryDesc.header) == FFX_API_RETURN_OK)
+        if (FfxApiProxy::D3D12_Query(nullptr, &memoryDesc.header) == FFX_API_RETURN_OK)
         {
-            // Signed: denoiser 1.2.0 can report a negative total (seen as about -137 MB at 1280x720), which as an
-            // unsigned value read as 2^64 bytes
-            LOG_INFO("Denoiser GPU memory: {:.1f} MB total, {:.1f} MB aliasable",
+            // Signed, in case the expected usage is also off
+            LOG_INFO("Denoiser GPU memory (expected): {:.1f} MB total, {:.1f} MB aliasable",
                      static_cast<int64_t>(usage.totalUsageInBytes) / (1024.0 * 1024.0),
                      static_cast<int64_t>(usage.aliasableUsageInBytes) / (1024.0 * 1024.0));
         }
@@ -495,12 +498,6 @@ std::array<ID3D12Resource**, 11> FSRDFeatureDx12::ScratchResources()
              &_motionVectors, &_sentinelCounter, &_composedColor, &_reactiveMask, &_bypassColor };
 }
 
-void FSRDFeatureDx12::ReleaseScratchResources()
-{
-    // Only for resources no recorded GPU work uses yet (init failure)
-    for (auto resource : ScratchResources())
-        SAFE_RELEASE(*resource);
-}
 
 bool FSRDFeatureDx12::PrepareComposedColor(ID3D12Resource* color)
 {
@@ -676,11 +673,7 @@ bool FSRDFeatureDx12::InitInternal(ID3D12GraphicsCommandList* InCommandList, NVS
     }
 
     if (!_hwDepth)
-    {
-        // The prepass only knows how to linearize HW depth
-        LOG_WARN("Game sends linear depth (DLSS.Use.HW.Depth != 1), FSR Ray Regeneration not supported, only upscaling");
-        _denoiserDisabled = true;
-    }
+        LOG_INFO("Game sends linear depth (DLSS.Use.HW.Depth != 1), used as view Z");
 
     if (_denoiserDisabled)
         return true;
@@ -689,23 +682,17 @@ bool FSRDFeatureDx12::InitInternal(ID3D12GraphicsCommandList* InCommandList, NVS
     _validation = Config::Instance()->FsrdValidation.value_or_default();
     _directSignals = Config::Instance()->FsrdSignalType.value_or_default() == 1;
 
-    // Scratch and the denoiser context start at the render size the feature was created with (it follows the
-    // game's output resolution and upscaling mode); a frame that renders larger grows them (ResizeForRenderSize)
-    _maxRenderWidth = RenderWidth() > 0 ? RenderWidth() : DisplayWidth();
-    _maxRenderHeight = RenderHeight() > 0 ? RenderHeight() : DisplayHeight();
-
     _prepass = std::make_unique<FsrdPass_Dx12>("FSRD Prepass", Device, 8, 6, fsrd_prepass_cso, sizeof(fsrd_prepass_cso));
-    _compose = std::make_unique<FsrdPass_Dx12>("FSRD Compose", Device, 9, 2, fsrd_compose_cso, sizeof(fsrd_compose_cso));
+    _compose =
+        std::make_unique<FsrdPass_Dx12>("FSRD Compose", Device, 10, 2, fsrd_compose_cso, sizeof(fsrd_compose_cso));
     _particlesPass = std::make_unique<FsrdPass_Dx12>("FSRD Particles", Device, 2, 1, fsrd_particles_cso,
                                                      sizeof(fsrd_particles_cso));
     // Diagnostics only, the denoiser works without it
     _probe = std::make_unique<FsrdProbe>(Device);
 
-    if (!_prepass->CanRender() || !_compose->CanRender() || !_particlesPass->CanRender() || !CreateScratchResources() ||
-        !CreateDenoiserContext())
+    if (!_prepass->CanRender() || !_compose->CanRender() || !_particlesPass->CanRender())
     {
         LOG_ERROR("FSR Ray Regeneration init failed, only upscaling");
-        ReleaseScratchResources();
         _prepass.reset();
         _compose.reset();
         _particlesPass.reset();
@@ -713,7 +700,41 @@ bool FSRDFeatureDx12::InitInternal(ID3D12GraphicsCommandList* InCommandList, NVS
         _denoiserDisabled = true;
     }
 
+    // The scratch textures and the denoiser context are created on the first frame (EnsureDenoiser): the game
+    // creates and drops a throwaway feature before the real one, which then never allocates any of it
     return true;
+}
+
+bool FSRDFeatureDx12::EnsureDenoiser(unsigned int renderWidth, unsigned int renderHeight)
+{
+    if (_denoiserContextCreated)
+        return true;
+
+    // Sized for the larger of the feature's render size (it follows the output resolution and upscaling mode) and
+    // this frame's; a frame that renders larger later grows them (ResizeForRenderSize)
+    _maxRenderWidth = std::max({ _maxRenderWidth, RenderWidth(), renderWidth });
+    _maxRenderHeight = std::max({ _maxRenderHeight, RenderHeight(), renderHeight });
+
+    // The menu can change these before the first frame
+    _debugView = Config::Instance()->FsrdDebugView.value_or_default();
+    _validation = Config::Instance()->FsrdValidation.value_or_default();
+    _directSignals = Config::Instance()->FsrdSignalType.value_or_default() == 1;
+
+    for (auto& sent : _tuningSent)
+        sent = false;
+
+    if (CreateScratchResources() && CreateDenoiserContext())
+        return true;
+
+    for (auto resource : { &_diffuseIn, &_diffuseOut, &_specularIn, &_specularOut, &_linearDepth, &_packedNormals,
+                           &_motionVectors, &_sentinelCounter })
+    {
+        Retire(*resource);
+    }
+
+    _denoiserFailures = MaxDenoiserFailures;
+    DisableDenoiserOnFailure("FSR Ray Regeneration init failed, only upscaling");
+    return false;
 }
 
 bool FSRDFeatureDx12::GatherInputs(NVSDK_NGX_Parameter* InParameters, FrameInputs& in)
@@ -727,6 +748,7 @@ bool FSRDFeatureDx12::GatherInputs(NVSDK_NGX_Parameter* InParameters, FrameInput
     in.specularAlbedo = GetResource(InParameters, DlssdKeys::SpecularAlbedo);
     in.specularHitDistance = GetResource(InParameters, DlssdKeys::SpecularHitDistance);
     in.particles = GetParticleLayer(InParameters, in.color);
+    in.beforeTransparency = GetTransparencyLayer(InParameters, in.color);
 
     if (in.color == nullptr || in.motionVectors == nullptr || in.depth == nullptr || in.normals == nullptr ||
         in.diffuseAlbedo == nullptr || in.specularAlbedo == nullptr)
@@ -748,6 +770,9 @@ bool FSRDFeatureDx12::GatherInputs(NVSDK_NGX_Parameter* InParameters, FrameInput
     in.renderWidth = std::min(in.renderWidth, (unsigned int) colorDesc.Width);
     in.renderHeight = std::min(in.renderHeight, (unsigned int) colorDesc.Height);
 
+    if (!EnsureDenoiser(in.renderWidth, in.renderHeight))
+        return false;
+
     if ((in.renderWidth > _maxRenderWidth || in.renderHeight > _maxRenderHeight) &&
         !ResizeForRenderSize(in.renderWidth, in.renderHeight))
     {
@@ -765,9 +790,10 @@ bool FSRDFeatureDx12::GatherInputs(NVSDK_NGX_Parameter* InParameters, FrameInput
     in.hasView = found;
     auto projection = ReadMatrix(InParameters, DlssdKeys::ViewToClipMatrix, &found);
 
-    if (!found || projection.rows[3].z == 0.0f)
+    // HW depth is linearized with it, and the denoiser always needs it
+    if (!found || (_hwDepth && projection.rows[3].z == 0.0f))
     {
-        LOG_WARN("Skipping denoise, no usable ViewToClipMatrix to linearize depth");
+        LOG_WARN("Skipping denoise, no usable ViewToClipMatrix");
         return false;
     }
 
@@ -814,7 +840,9 @@ FsrdPass_Dx12::Constants FSRDFeatureDx12::BuildConstants(const FrameInputs& in, 
     constants.DiffuseHitDistance = config->FsrdDiffuseHitDistance.value_or_default();
     constants.Flags = (in.separateRoughness ? FlagSeparateRoughness : 0) |
                       (in.specularHitDistance != nullptr ? FlagHasSpecHitDistance : 0) |
-                      (DepthInverted() ? FlagDepthInverted : 0) | (in.particles != nullptr ? FlagParticleLayer : 0);
+                      (DepthInverted() ? FlagDepthInverted : 0) | (in.particles != nullptr ? FlagParticleLayer : 0) |
+                      (_hwDepth ? 0 : FlagLinearDepth) |
+                      (in.beforeTransparency != nullptr ? FlagTransparencyLayer : 0);
     constants.RenderWidth = in.renderWidth;
     constants.RenderHeight = in.renderHeight;
     constants.SkyDepth = SkyDepth;
@@ -877,8 +905,10 @@ bool FSRDFeatureDx12::RunPrepass(ID3D12GraphicsCommandList* InCommandList, const
                               { _packedNormals, read, write },
                               { _motionVectors, read, write } });
 
+    // With the transparency layer the denoiser gets the image before fog/glass/particles, compose adds them back
     const bool ok = _prepass->Dispatch(InCommandList,
-                                       { in.color, in.diffuseAlbedo, in.specularAlbedo, in.normals,
+                                       { in.beforeTransparency != nullptr ? in.beforeTransparency : in.color,
+                                         in.diffuseAlbedo, in.specularAlbedo, in.normals,
                                          in.separateRoughness ? in.roughness : nullptr, in.depth,
                                          in.specularHitDistance, in.motionVectors },
                                        { _diffuseIn, _specularIn, _linearDepth, _packedNormals, _motionVectors,
@@ -1032,7 +1062,8 @@ bool FSRDFeatureDx12::RunCompose(ID3D12GraphicsCommandList* InCommandList, NVSDK
 
     const bool ok = _compose->Dispatch(InCommandList,
                                        { in.color, in.diffuseAlbedo, in.specularAlbedo, in.depth, _diffuseOut,
-                                         _specularOut, gameReactive, _packedNormals, in.particles },
+                                         _specularOut, gameReactive, _packedNormals, in.particles,
+                                         in.beforeTransparency },
                                        { _composedColor, _reactiveMask }, constants, (UINT) composedDesc.Width,
                                        composedDesc.Height);
 
@@ -1123,6 +1154,38 @@ ID3D12Resource* FSRDFeatureDx12::GetParticleLayer(NVSDK_NGX_Parameter* InParamet
     return particles;
 }
 
+ID3D12Resource* FSRDFeatureDx12::GetTransparencyLayer(NVSDK_NGX_Parameter* InParameters, ID3D12Resource* color)
+{
+    // Games like The Witcher 3 send the image before transparencies (fog, glass, particles) in
+    // DLSSD.ColorBeforeTransparency. Denoising that one keeps fog out of the denoiser, which filters it away.
+    ID3D12Resource* before = nullptr;
+
+    if (Config::Instance()->FsrdTransparencyLayer.value_or_default() == 1 && color != nullptr)
+    {
+        before = GetResource(InParameters, DlssdKeys::ColorBeforeTransparency);
+
+        if (before != nullptr)
+        {
+            auto colorDesc = color->GetDesc();
+            auto beforeDesc = before->GetDesc();
+
+            if (beforeDesc.Width < colorDesc.Width || beforeDesc.Height < colorDesc.Height)
+                before = nullptr;
+        }
+    }
+
+    const int mode = before != nullptr ? 1 : 0;
+
+    if (mode != _lastTransparencyLayer)
+    {
+        LOG_INFO("Transparency layer: {}", mode == 0 ? "off" : "denoising the color before transparency");
+        _lastTransparencyLayer = mode;
+        _resetDenoiserHistory = true;
+    }
+
+    return before;
+}
+
 ID3D12Resource* FSRDFeatureDx12::BypassWithParticles(ID3D12GraphicsCommandList* InCommandList,
                                                      NVSDK_NGX_Parameter* InParameters)
 {
@@ -1201,13 +1264,19 @@ bool FSRDFeatureDx12::EvaluateInternal(ID3D12GraphicsCommandList* InCommandList,
     // game's reactive mask is kept, ours isn't written.
     bool gameReactiveOnly = false;
 
-    if (Config::Instance()->FsrdParticleLayer.value_or_default() == 2)
-    {
-        auto rawParticles = GetResource(InParameters, DlssdKeys::ColorBeforeParticles);
+    // Same for DLSSD.ColorBeforeTransparency
+    const std::pair<int, const char*> rawLayers[] = {
+        { Config::Instance()->FsrdParticleLayer.value_or_default(), DlssdKeys::ColorBeforeParticles },
+        { Config::Instance()->FsrdTransparencyLayer.value_or_default(), DlssdKeys::ColorBeforeTransparency },
+    };
 
-        if (rawParticles != nullptr)
+    for (const auto& [mode, key] : rawLayers)
+    {
+        auto raw = mode == 2 ? GetResource(InParameters, key) : nullptr;
+
+        if (raw != nullptr && composed == nullptr)
         {
-            composed = rawParticles;
+            composed = raw;
             gameReactiveOnly = true;
             _resetDenoiserHistory = true;
         }
@@ -1222,7 +1291,8 @@ bool FSRDFeatureDx12::EvaluateInternal(ID3D12GraphicsCommandList* InCommandList,
         gameReactiveOnly = composed != nullptr;
     }
 
-    if (composed == nullptr && !bypass && !_denoiserDisabled && _denoiserContextCreated)
+    // The denoiser itself is created on the first frame that gets here (EnsureDenoiser)
+    if (composed == nullptr && !bypass && !_denoiserDisabled && _prepass != nullptr)
         composed = Denoise(InCommandList, InParameters);
 
     if (composed == nullptr)

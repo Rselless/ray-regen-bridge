@@ -18,9 +18,27 @@ Texture2D<float> GameReactive : register(t6);    // DLSS.Input.Bias.Current.Colo
 Texture2D<float4> PackedNormals : register(t7);  // prepass output, roughness in B, material in A
 Texture2D<float4> Particles : register(t8); // DLSSD.ColorBeforeParticles: steam/smoke/glows over black, alpha is
                                             // coverage, used with FLAG_PARTICLE_LAYER
+Texture2D<float4> BeforeTransparency : register(t9); // DLSSD.ColorBeforeTransparency, used with
+                                                     // FLAG_TRANSPARENCY_LAYER
 
 RWTexture2D<float4> Output : register(u0);
 RWTexture2D<float> Reactive : register(u1);
+
+// The prepass denoised the color before transparencies (fog, glass, particles), so their contribution is put back
+// undenoised: Color - BeforeTransparency. It also carries a bit of the noisy background where the transparency
+// dims it, but never filters away fog the way the denoiser does.
+float3 AddTransparency(float3 denoised, float3 color, int3 p)
+{
+    if ((Flags & FLAG_TRANSPARENCY_LAYER) == 0)
+        return denoised;
+
+    const float3 before = BeforeTransparency.Load(p).rgb;
+
+    if (!IsFinite3(before))
+        return denoised;
+
+    return max(denoised + (color - before), 0.0f);
+}
 
 // Puts the game's particle layer over a color: color * transmittance + particles (premultiplied)
 float3 OverParticles(float3 c, int3 p, inout float reactive)
@@ -64,7 +82,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
         const float3 denoised = DiffuseDenoised.Load(p).rgb;
         const bool diffuse = SentinelMode == SENTINEL_DIFFUSE && IsFinite3(denoised) && IsFinite3(color.rgb);
 
-        const float3 sentinelColor = diffuse ? max(denoised, 0.0f) : color.rgb;
+        const float3 sentinelColor = diffuse ? AddTransparency(max(denoised, 0.0f), color.rgb, p) : color.rgb;
         Output[DTid.xy] = float4(OverParticles(sentinelColor, p, gameReactive), color.a);
         Reactive[DTid.xy] = gameReactive;
         return;
@@ -92,6 +110,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
 
     float specularShare = saturate(dot(specular, LumaWeights) / max(dot(composed, LumaWeights), 1e-4f));
     float smoothness = 1.0f - smoothstep(0.1f, 0.5f, packedNormals.z);
+    composed = AddTransparency(composed, color.rgb, p);
 
     float reactive = max(gameReactive, saturate(ReflectionReactive * specularShare * smoothness));
     Output[DTid.xy] = float4(OverParticles(composed, p, reactive), color.a);

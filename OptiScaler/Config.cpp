@@ -417,6 +417,10 @@ bool Config::Reload(std::filesystem::path iniPath)
             if (auto setting = readInt("FSRD", "ParticleLayer"); setting.has_value() && setting >= 0 && setting <= 2)
                 FsrdParticleLayer.set_from_config(setting);
 
+            if (auto setting = readInt("FSRD", "TransparencyLayer");
+                setting.has_value() && setting >= 0 && setting <= 2)
+                FsrdTransparencyLayer.set_from_config(setting);
+
             FsrdDiagnostics.set_from_config(readBool("FSRD", "Diagnostics"));
 
             if (auto setting = readInt("FSRD", "SignalType"); setting.has_value() && setting >= 0 && setting <= 1)
@@ -1256,6 +1260,8 @@ bool Config::SaveIni()
                      GetFloatValue(Instance()->FsrdSpecHitDistanceScale.value_for_config()).c_str());
         ini.SetValue("FSRD", "SentinelMode", GetIntValue(Instance()->FsrdSentinelMode.value_for_config()).c_str());
         ini.SetValue("FSRD", "ParticleLayer", GetIntValue(Instance()->FsrdParticleLayer.value_for_config()).c_str());
+        ini.SetValue("FSRD", "TransparencyLayer",
+                     GetIntValue(Instance()->FsrdTransparencyLayer.value_for_config()).c_str());
         ini.SetValue("FSRD", "Diagnostics", GetBoolValue(Instance()->FsrdDiagnostics.value_for_config()).c_str());
         ini.SetValue("FSRD", "SignalType", GetIntValue(Instance()->FsrdSignalType.value_for_config()).c_str());
         ini.SetValue("FSRD", "StabilityBias",

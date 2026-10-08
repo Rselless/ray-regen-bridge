@@ -48,6 +48,7 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     int _lastSplitMode = -1;
     int _lastSentinelMode = -1;
     int _lastParticleLayer = -1;
+    int _lastTransparencyLayer = -1;
     bool _wasBypassed = false;
 
     // Previous frame's WorldToViewMatrix, for cameraPositionDelta and the MV depth delta
@@ -108,6 +109,7 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
         ID3D12Resource* specularAlbedo = nullptr;
         ID3D12Resource* specularHitDistance = nullptr;
         ID3D12Resource* particles = nullptr; // DLSSD.ColorBeforeParticles when the particle layer is on
+        ID3D12Resource* beforeTransparency = nullptr; // DLSSD.ColorBeforeTransparency when the transparency layer is on
         unsigned int renderWidth = 0;
         unsigned int renderHeight = 0;
         float view[4][4] {};       // WorldToViewMatrix, row-vector
@@ -122,7 +124,7 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     bool CreateScratchResources();
     bool ResizeForRenderSize(unsigned int renderWidth, unsigned int renderHeight);
     std::array<ID3D12Resource**, 11> ScratchResources();
-    void ReleaseScratchResources();
+    bool EnsureDenoiser(unsigned int renderWidth, unsigned int renderHeight);
     bool PrepareComposedColor(ID3D12Resource* color);
     void DisableDenoiserOnFailure(const char* reason);
     void ApplyTuning();
@@ -136,6 +138,7 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     void ProcessInitParams(NVSDK_NGX_Parameter* InParameters);
 
     ID3D12Resource* GetParticleLayer(NVSDK_NGX_Parameter* InParameters, ID3D12Resource* color);
+    ID3D12Resource* GetTransparencyLayer(NVSDK_NGX_Parameter* InParameters, ID3D12Resource* color);
     ID3D12Resource* BypassWithParticles(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters);
 
     // Denoise() steps, each returns false (or the fallback) after logging a failure

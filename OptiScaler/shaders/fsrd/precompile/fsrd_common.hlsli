@@ -56,28 +56,42 @@ cbuffer Params : register(b0)
 #define FLAG_DEPTH_INVERTED 0x4
 #define FLAG_PARTICLE_LAYER 0x8     // particle layer (premultiplied, alpha = coverage) goes over the result
 #define FLAG_COUNT_SENTINELS 0x10   // prepass: count sentinel texels (only while the probe samples)
+#define FLAG_LINEAR_DEPTH 0x20      // the game's depth is already linear view Z (DLSS.Use.HW.Depth 0)
+#define FLAG_TRANSPARENCY_LAYER 0x40 // prepass got DLSSD.ColorBeforeTransparency, compose adds Color - that back
 
 #define MATERIAL_SURFACE 0.0f  // packed normals alpha: material type the denoiser doesn't filter across
 #define MATERIAL_SENTINEL 1.0f // sentinel texels, kept apart from real surfaces; compose reads it back
 
-static const float NoHitDistance = 10000.0f; // game's specular hit distance when the ray missed (ReSTIR DI)
+// Game's specular hit distance when the ray missed: 2000 with Cyberpunk's default path tracing, 10000 with ReSTIR
+// DI presets. Anything from FarHitDistance up is sent as a miss (real hits that far reproject like a miss anyway).
+static const float FarHitDistance = 1999.0f;
 static const float MaxHitDistance = 65504.0f;
 
 static const float3 LumaWeights = float3(0.2126f, 0.7152f, 0.0722f);
 static const float MinAlbedo = 0.02f;     // per channel, keeps the demodulated signal bounded
 static const float MinTotalAlbedo = 0.004f;
 
+// hwDepth is the game's depth texel: HW depth, or linear view Z with FLAG_LINEAR_DEPTH
 bool IsSky(float hwDepth)
 {
+    if (Flags & FLAG_LINEAR_DEPTH)
+        return hwDepth <= 0.0f || hwDepth >= SkyDepth;
+
     return (Flags & FLAG_DEPTH_INVERTED) ? hwDepth <= 0.0f : hwDepth >= 1.0f;
 }
 
 // HW depth -> view space Z for a row-vector projection (clip.w = view.z): d = ProjZZ + ProjWZ / viewZ
 float LinearDepth(float hwDepth)
 {
+    if (IsSky(hwDepth))
+        return SkyDepth;
+
+    if (Flags & FLAG_LINEAR_DEPTH)
+        return hwDepth;
+
     float denom = hwDepth - ProjZZ;
 
-    if (IsSky(hwDepth) || abs(denom) < 1e-7f)
+    if (abs(denom) < 1e-7f)
         return SkyDepth;
 
     return min(ProjWZ / denom, SkyDepth);

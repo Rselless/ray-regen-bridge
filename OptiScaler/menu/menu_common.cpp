@@ -2820,6 +2820,17 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                            "Over denoised color: puts that layer over the result, undenoised\n"
                            "Show raw texture: upscales that texture as is, no denoise");
 
+            const char* transparencyModes[] = { "Off", "Denoise before transparency", "Show raw texture (debug)" };
+            int transparencyLayer = std::clamp(config->FsrdTransparencyLayer.value_or_default(), 0, 2);
+
+            if (ImGui::Combo("Transparency", &transparencyLayer, transparencyModes, IM_ARRAYSIZE(transparencyModes)))
+                config->FsrdTransparencyLayer = transparencyLayer;
+
+            ShowHelpMarker("For games that send DLSSD.ColorBeforeTransparency (The Witcher 3)\n"
+                           "Denoise before transparency: the denoiser gets the image before fog, glass\n"
+                           "and particles, which go back over the result undenoised (keeps the fog)\n"
+                           "Show raw texture: upscales that texture as is, to see what it holds");
+
             const char* sentinelModes[] = { "Passthrough", "Denoise as diffuse" };
             int sentinelMode = std::clamp(config->FsrdSentinelMode.value_or_default(), 0, 1);
 
