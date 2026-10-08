@@ -37,6 +37,17 @@ Se alguma etapa falhar, ele volta a só fazer o upscale da cor original. Depois 
 4. Copiar o `OptiScaler.dll` gerado para a pasta do jogo (`Cyberpunk 2077\bin\x64`) com o nome `winmm.dll`, junto do `OptiScaler.ini` e de `amd_fidelityfx_denoiser_dx12.dll`, `amd_fidelityfx_upscaler_dx12.dll` e `amd_fidelityfx_dx12.dll`.
 5. No jogo: Path Tracing ou Ray Tracing ligado, DLSS como upscaler e Ray Reconstruction ligado.
 
+## Launcher
+
+`Launcher/` gera `x64\Release\launcher\RayRegenBridge.exe`, com `profiles.ini` e a pasta `payload\` (OptiScaler e DLLs da AMD) ao lado. Ele:
+
+- acha os jogos da Steam (e pastas adicionadas à mão) e mostra quais têm DLSS Ray Reconstruction (`nvngx_dlssd.dll`);
+- escolhe a pasta do exe e o nome da DLL (`winmm.dll`, `dxgi.dll`...) pelo perfil do jogo ou pelo que o exe importa, e avisa sobre outros mods (ReShade, ASI Loader, outro OptiScaler);
+- instala sem substituir nada do jogo, guarda a lista do que instalou em `RayRegenBridge.installed` e desinstala só isso; na atualização o `OptiScaler.ini` do usuário é mantido;
+- junta `OptiScaler.log` e o ini num `.zip` na Área de Trabalho.
+
+Perfis por jogo ficam em `Launcher/profiles.ini` (nome da DLL, ajustes do ini, avisos). Sem janela: `RayRegenBridge.exe --scan arquivo.txt`, `--install <pasta do jogo>`, `--uninstall <pasta do jogo>`.
+
 ## Configuração
 
 Seção `[FSRD]` do `OptiScaler.ini`; a maioria também aparece no menu do OptiScaler dentro do jogo.
