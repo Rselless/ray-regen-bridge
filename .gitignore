@@ -463,3 +463,6 @@ sl.*.dll
 # Markdown: only README.md (already tracked .md files stay tracked)
 *.md
 !README.md
+
+# Ray Regen Bridge: launcher + payload ready to copy (Launcher.vcxproj)
+dist/

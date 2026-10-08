@@ -27,7 +27,7 @@
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <PropertyGroup>
-    <OutDir>$(SolutionDir)x64\$(Configuration)\launcher\</OutDir>
+    <OutDir>$(SolutionDir)dist\RayRegenBridge\</OutDir>
     <IntDir>$(ProjectDir)x64\$(Configuration)\</IntDir>
     <TargetName>RayRegenBridge</TargetName>
   </PropertyGroup>

@@ -19,6 +19,19 @@ Com o RR ligado, o jogo desliga os próprios denoisers e manda a imagem crua, co
 
 Se alguma etapa falhar, ele volta a só fazer o upscale da cor original. Depois de 3 falhas, o denoiser fica desligado até o jogo reiniciar.
 
+## Estrutura do repositório
+
+| Pasta | Conteúdo |
+| --- | --- |
+| `OptiScaler/` | Código do OptiScaler com o Ray Regen Bridge (nome do upstream, mantido para facilitar merges) |
+| `OptiScaler/upscalers/fsrd/` | A feature do Ray Regen Bridge |
+| `OptiScaler/shaders/fsrd/` | Shaders do prepass, compose, partículas e sonda |
+| `Launcher/` | Instalador/launcher (`RayRegenBridge.exe`) e perfis por jogo |
+| `tools/` | Scripts: `build_shaders.ps1` recompila os shaders e gera os headers |
+| `external/` | SDKs (FidelityFX, XeSS, Agility SDK...) |
+| `dist/` | Gerado: launcher pronto para usar (fora do git) |
+| `x64/` | Gerado: build do OptiScaler (fora do git) |
+
 ## Arquivos principais
 
 | Arquivo | O que faz |
@@ -39,7 +52,7 @@ Se alguma etapa falhar, ele volta a só fazer o upscale da cor original. Depois 
 
 ## Launcher
 
-`Launcher/` gera `x64\Release\launcher\RayRegenBridge.exe`, com `profiles.ini` e a pasta `payload\` (OptiScaler e DLLs da AMD) ao lado. Ele:
+`Launcher/` gera `dist\RayRegenBridge\RayRegenBridge.exe`, com `profiles.ini` e a pasta `payload\` (OptiScaler e DLLs da AMD) ao lado. Essa pasta é tudo o que precisa ser copiado ou distribuído. Ele:
 
 - acha os jogos da Steam (e pastas adicionadas à mão) e mostra quais têm DLSS Ray Reconstruction (`nvngx_dlssd.dll`);
 - escolhe a pasta do exe e o nome da DLL (`winmm.dll`, `dxgi.dll`...) pelo perfil do jogo ou pelo que o exe importa, e avisa sobre outros mods (ReShade, ASI Loader, outro OptiScaler);
