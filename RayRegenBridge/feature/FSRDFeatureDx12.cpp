@@ -1098,7 +1098,11 @@ bool FSRDFeatureDx12::RunDenoiser(ID3D12GraphicsCommandList* InCommandList, NVSD
 
     memcpy(&dispatchDesc.view, in.view, sizeof(dispatchDesc.view));
     memcpy(&dispatchDesc.projection, in.projection, sizeof(dispatchDesc.projection));
-    dispatchDesc.linearDepthBounds = { 0.0f, SkyDepthBound };
+    // Texels beyond the bounds are passed through: the sky always, and with [FSRD] FarPassthrough the distant scene
+    // too, which keeps the game's fog there (the denoiser filters it away)
+    const float farPassthrough = Config::Instance()->FsrdFarPassthrough.value_or_default();
+    dispatchDesc.linearDepthBounds = { 0.0f, farPassthrough > 0.0f ? std::min(farPassthrough, SkyDepthBound)
+                                                                   : SkyDepthBound };
     dispatchDesc.renderSize = { in.renderWidth, in.renderHeight };
     dispatchDesc.frameIndex = _denoiserFrameIndex++;
 

@@ -421,6 +421,13 @@ bool Config::Reload(std::filesystem::path iniPath)
                 setting.has_value() && setting >= 0 && setting <= 2)
                 FsrdTransparencyLayer.set_from_config(setting);
 
+            if (auto setting = readFloat("FSRD", "FarPassthrough"); setting.has_value() && setting.value() >= 0.0f)
+                FsrdFarPassthrough.set_from_config(setting);
+
+            if (auto setting = readFloat("FSRD", "DefaultSharpness");
+                setting.has_value() && setting.value() >= 0.0f && setting.value() <= 1.0f)
+                FsrdDefaultSharpness.set_from_config(setting);
+
             FsrdDiagnostics.set_from_config(readBool("FSRD", "Diagnostics"));
 
             if (auto setting = readInt("FSRD", "SignalType"); setting.has_value() && setting >= 0 && setting <= 1)
@@ -1262,6 +1269,9 @@ bool Config::SaveIni()
         ini.SetValue("FSRD", "ParticleLayer", GetIntValue(Instance()->FsrdParticleLayer.value_for_config()).c_str());
         ini.SetValue("FSRD", "TransparencyLayer",
                      GetIntValue(Instance()->FsrdTransparencyLayer.value_for_config()).c_str());
+        ini.SetValue("FSRD", "FarPassthrough", GetFloatValue(Instance()->FsrdFarPassthrough.value_for_config()).c_str());
+        ini.SetValue("FSRD", "DefaultSharpness",
+                     GetFloatValue(Instance()->FsrdDefaultSharpness.value_for_config()).c_str());
         ini.SetValue("FSRD", "Diagnostics", GetBoolValue(Instance()->FsrdDiagnostics.value_for_config()).c_str());
         ini.SetValue("FSRD", "SignalType", GetIntValue(Instance()->FsrdSignalType.value_for_config()).c_str());
         ini.SetValue("FSRD", "StabilityBias",

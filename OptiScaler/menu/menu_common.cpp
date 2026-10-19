@@ -2826,10 +2826,26 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
             if (ImGui::Combo("Transparency", &transparencyLayer, transparencyModes, IM_ARRAYSIZE(transparencyModes)))
                 config->FsrdTransparencyLayer = transparencyLayer;
 
-            ShowHelpMarker("For games that send DLSSD.ColorBeforeTransparency (The Witcher 3)\n"
-                           "Denoise before transparency: the denoiser gets the image before fog, glass\n"
-                           "and particles, which go back over the result undenoised (keeps the fog)\n"
+            ShowHelpMarker("For games that send DLSSD.ColorBeforeTransparency or ColorBeforeFog (The Witcher 3)\n"
+                           "Denoise before transparency: the denoiser gets the image before glass, smoke\n"
+                           "and particles (or fog), which go back over the result undenoised\n"
                            "Show raw texture: upscales that texture as is, to see what it holds");
+
+            float farPassthrough = config->FsrdFarPassthrough.value_or_default();
+            if (ImGui::SliderFloat("Far Passthrough", &farPassthrough, 0.0f, 1000.0f,
+                                   farPassthrough > 0.0f ? "%.0f m" : "Off"))
+                config->FsrdFarPassthrough = farPassthrough;
+
+            ShowHelpMarker("Scene farther than this skips the denoiser and keeps the game's image,\n"
+                           "including its distant fog. Off denoises everything but the sky.\n"
+                           "Too close a value leaves distant noise and a visible edge");
+
+            float defaultSharpness = config->FsrdDefaultSharpness.value_or_default();
+            if (ImGui::SliderFloat("Default Sharpness", &defaultSharpness, 0.0f, 1.0f, "%.2f"))
+                config->FsrdDefaultSharpness = defaultSharpness;
+
+            ShowHelpMarker("RCAS sharpness used when the game and the Sharpness override set none\n"
+                           "(the denoiser softens fine detail). 0 turns it off");
 
             const char* sentinelModes[] = { "Passthrough", "Denoise as diffuse" };
             int sentinelMode = std::clamp(config->FsrdSentinelMode.value_or_default(), 0, 1);

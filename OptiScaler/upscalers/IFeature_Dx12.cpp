@@ -60,10 +60,20 @@ bool IFeature_Dx12::Evaluate(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX
     if (_sharpness > 1.0f)
         _sharpness = 1.0f;
 
-    // Those upcalers don't have their own sharpness so always need to use RCAS when sharpness is set
     auto upscaler = GetUpscalerType();
+
+    // Ray Regen Bridge: the denoiser softens fine detail, so it sharpens a bit with RCAS when neither the game nor
+    // the user sets a sharpness ([FSRD] DefaultSharpness)
+    const bool rrbDefaultSharpness = upscaler == Upscaler::FSRD && !Config::Instance()->OverrideSharpness.value_or_default() &&
+                                     _sharpness == 0.0f;
+
+    if (rrbDefaultSharpness)
+        _sharpness = std::clamp(Config::Instance()->FsrdDefaultSharpness.value_or_default(), 0.0f, 1.0f);
+
+    // Those upcalers don't have their own sharpness so always need to use RCAS when sharpness is set
     bool useRcas = upscaler == Upscaler::XeSS ||
-                   (upscaler == Upscaler::DLSS && Version() >= feature_version(2, 5, 1)) || upscaler == Upscaler::DLSSD;
+                   (upscaler == Upscaler::DLSS && Version() >= feature_version(2, 5, 1)) || upscaler == Upscaler::DLSSD ||
+                   rrbDefaultSharpness;
 
     if (!useRcas)
         useRcas = Config::Instance()->RcasEnabled.value_or_default();

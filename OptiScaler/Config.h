@@ -307,7 +307,11 @@ class Config
     CustomOptional<int> FsrdParticleLayer { 1 };
     // Games that send DLSSD.ColorBeforeTransparency (The Witcher 3): 0 = off, 1 = denoise that texture and put the
     // transparencies (fog, glass, particles) back over the result undenoised, 2 = debug, upscale that texture as is
-    CustomOptional<int> FsrdTransparencyLayer { 0 };
+    CustomOptional<int> FsrdTransparencyLayer { 1 };
+    // Texels farther than this (view Z, meters) skip the denoiser and keep the game's color (distant fog), 0 = off
+    CustomOptional<float> FsrdFarPassthrough { 0.0f };
+    // RCAS sharpness applied when neither the game nor the user sets one (the denoiser softens fine detail)
+    CustomOptional<float> FsrdDefaultSharpness { 0.25f };
     // Periodic probe log of the inputs (hit distance, depth, normals, albedos) outside captures
     CustomOptional<bool> FsrdDiagnostics { false };
     // Denoiser signal types: 0 = indirect diffuse/specular (with hit distance), 1 = direct (no hit distance)

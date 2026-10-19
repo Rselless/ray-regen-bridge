@@ -76,6 +76,9 @@ Seção `[FSRD]` do `OptiScaler.ini`; a maioria também aparece no menu do OptiS
 | `SpecHitDistanceScale` | `1.0` | Multiplicador da distância dos reflexos enviada pelo jogo |
 | `DebugView` | `false` | Mostra a tela de depuração do denoiser no lugar da imagem |
 | `MaxRadiance` | `100` | Teto do sinal do denoiser; sem ele (65504, padrão da AMD) a névoa e a luz sobre superfícies escuras viram um brilho chapado |
+| `TransparencyLayer` | `1` | Jogos que mandam a imagem antes das transparências (Witcher 3): fumaça, fogo e vidro voltam por cima sem denoise |
+| `FarPassthrough` | `0` (desligado) | Distância em metros a partir da qual a cena pula o denoiser e mantém a névoa distante do jogo |
+| `DefaultSharpness` | `0.25` | Nitidez RCAS quando nem o jogo nem o override de Sharpness definem uma |
 | `StabilityBias`, `RadianceClipStdK`, `KernelRelaxation` | padrão da AMD | Ajuste fino do denoiser |
 
 ## Limitações
