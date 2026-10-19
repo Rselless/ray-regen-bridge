@@ -11,6 +11,24 @@ Texture2D<float> Roughness : register(t4);
 Texture2D<float> Depth : register(t5);
 Texture2D<float> SpecularHitDistance : register(t6);
 Texture2D<float4> MotionVectors : register(t7);
+Texture2D<float4> SssGuide : register(t8); // DLSSD.ScreenSpaceSubsurfaceScatteringGuide, used with FLAG_SSS_GUIDE
+Texture2D<float4> DiffuseHit : register(t9); // DLSSD.DiffuseHitDistance (.r) or DiffuseRayDirectionHitDistance (.w)
+Texture2D<float4> Emissive : register(t10);  // GBuffer.Emissive, null reads 0: kept out of the denoiser
+
+// The game's diffuse hit distance when it sends one, FarHitDistance and up = miss, else the constant fallback
+float GameDiffuseHit(int3 p)
+{
+    if ((Flags & FLAG_DIFFUSE_HIT) == 0)
+        return DiffuseHitDistance;
+
+    const float4 texel = DiffuseHit.Load(p);
+    const float hit = (Flags & FLAG_DIFFUSE_HIT_IN_W) ? texel.w : texel.r;
+
+    if (!(hit > 0.0f))
+        return DiffuseHitDistance;
+
+    return hit >= FarHitDistance ? MaxHitDistance : hit;
+}
 
 RWTexture2D<float4> DiffuseSignal : register(u0);
 RWTexture2D<float4> SpecularSignal : register(u1);
@@ -53,9 +71,12 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
 
     int3 p = int3(DTid.xy, 0);
 
-    float3 color = Color.Load(p).rgb;
+    // Signals are in scene units: the game's color comes multiplied by its pre-exposure, compose multiplies back.
+    // Emissive light (neons, screens) isn't noisy: it stays out of the denoiser and compose adds it back.
+    float3 color = (Color.Load(p).rgb - max(Emissive.Load(p).rgb, 0.0f)) / PreExposure;
+    const float diffuseHit = GameDiffuseHit(p);
     float hwDepth = Depth.Load(p);
-    float4 n = Normals.Load(p);
+    float4 n = DecodeNormals(Normals.Load(p));
     float3 diffuseAlbedo = DiffuseAlbedo.Load(p).rgb;
     float3 specularAlbedo = SpecularAlbedo.Load(p).rgb;
 
@@ -91,8 +112,11 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
 
     float viewZ = LinearDepth(hwDepth);
 
-    // Passthrough sentinels are inactive for the denoiser, so there the material only tells compose what they are
-    const float material = sentinel ? MATERIAL_SENTINEL : MATERIAL_SURFACE;
+    // Passthrough sentinels are inactive for the denoiser, so there the material only tells compose what they are.
+    // Skin (marked by the game's SSS guide) is its own material, so it isn't filtered together with clothes, hair and
+    // the background.
+    const bool skin = (Flags & FLAG_SSS_GUIDE) && any(SssGuide.Load(p).rgb > 0.01f);
+    const float material = sentinel ? MATERIAL_SENTINEL : skin ? MATERIAL_SKIN : MATERIAL_SURFACE;
     PackedNormals[DTid.xy] = float4(NormalToOctahedronUv(normal), saturate(roughness), material);
     LinearDepthOut[DTid.xy] = viewZ;
     MotionVectorsOut[DTid.xy] = BuildMotionVector(DTid.xy, viewZ, IsSky(hwDepth) || viewZ >= SkyDepth);
@@ -102,7 +126,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
         // Passthrough: inactive for the denoiser, compose keeps the game's color. Diffuse: albedo is white, so
         // the color goes undemodulated through the diffuse signal only.
         const bool diffuse = SentinelMode == SENTINEL_DIFFUSE && IsFinite3(color);
-        DiffuseSignal[DTid.xy] = diffuse ? float4(max(color, 0.0f), DiffuseHitDistance) : float4(0.0f, 0.0f, 0.0f, -1.0f);
+        DiffuseSignal[DTid.xy] = diffuse ? float4(max(color, 0.0f), diffuseHit) : float4(0.0f, 0.0f, 0.0f, -1.0f);
         SpecularSignal[DTid.xy] = float4(0.0f, 0.0f, 0.0f, -1.0f);
         return;
     }
@@ -139,6 +163,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
 
     const float wd = specActive ? DiffuseWeight(albedoRatio, saturate(roughness)) : 1.0f;
 
-    DiffuseSignal[DTid.xy] = float4(color * wd / dMod, DiffuseHitDistance);
+    DiffuseSignal[DTid.xy] = float4(color * wd / dMod, diffuseHit);
     SpecularSignal[DTid.xy] = specActive ? float4(color * (1.0f - wd) / sMod, specHit) : float4(0.0f, 0.0f, 0.0f, -1.0f);
 }

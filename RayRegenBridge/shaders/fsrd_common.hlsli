@@ -41,7 +41,8 @@ cbuffer Params : register(b0)
     uint SentinelMode;        // SENTINEL_PASSTHROUGH or SENTINEL_DIFFUSE
 
     uint CounterSlot;         // prepass: SentinelCounter texel counted this frame, the other one is cleared
-    float3 Pad3;
+    float PreExposure;        // the game's color is multiplied by this (DLSS.Pre.Exposure), signals are divided by it
+    float2 Pad3;
 };
 
 #define SENTINEL_PASSTHROUGH 0
@@ -58,9 +59,16 @@ cbuffer Params : register(b0)
 #define FLAG_COUNT_SENTINELS 0x10   // prepass: count sentinel texels (only while the probe samples)
 #define FLAG_LINEAR_DEPTH 0x20      // the game's depth is already linear view Z (DLSS.Use.HW.Depth 0)
 #define FLAG_TRANSPARENCY_LAYER 0x40 // prepass got DLSSD.ColorBeforeTransparency, compose adds Color - that back
+#define FLAG_NORMALS_UNORM 0x80     // the game's normals are UNORM: xyz = 2 * v - 1
+#define FLAG_SSS_GUIDE 0x100        // prepass: DLSSD.ScreenSpaceSubsurfaceScatteringGuide marks skin
+#define FLAG_LAYER_OPACITY 0x200    // compose: the layer's coverage comes from DLSS.TransparencyLayerOpacity
+#define FLAG_DIFFUSE_HIT 0x400      // prepass: the game sends a diffuse hit distance (DiffuseHitDistance texture)
+#define FLAG_DIFFUSE_HIT_IN_W 0x800 // ... packed in .w (DLSSD.DiffuseRayDirectionHitDistance), else in .r
 
-#define MATERIAL_SURFACE 0.0f  // packed normals alpha: material type the denoiser doesn't filter across
-#define MATERIAL_SENTINEL 1.0f // sentinel texels, kept apart from real surfaces; compose reads it back
+// Packed normals alpha: material type 0-3 / 3, the denoiser doesn't filter across different materials
+#define MATERIAL_SURFACE 0.0f            // type 0
+#define MATERIAL_SKIN (1.0f / 3.0f)      // type 1, texels the game's SSS guide marks (skin), kept apart
+#define MATERIAL_SENTINEL 1.0f           // type 3, sentinel texels, kept apart from real surfaces; compose reads it back
 
 // Game's specular hit distance when the ray missed: 2000 with Cyberpunk's default path tracing, 10000 with ReSTIR
 // DI presets. Anything from FarHitDistance up is sent as a miss (real hits that far reproject like a miss anyway).
@@ -139,6 +147,15 @@ bool IsSentinel(float4 normals, float3 diffuseAlbedo, float3 specularAlbedo)
 {
     return all(abs(normals.xyz + 0.57735f) < 0.01f) && normals.w <= 1e-4f && all(diffuseAlbedo > 0.99f) &&
            all(specularAlbedo > 0.99f);
+}
+
+// The game's normals texel with xyz in [-1, 1]; roughness (w) is left as stored
+float4 DecodeNormals(float4 n)
+{
+    if (Flags & FLAG_NORMALS_UNORM)
+        n.xyz = n.xyz * 2.0f - 1.0f;
+
+    return n;
 }
 
 float2 NormalToOctahedronUv(float3 N)

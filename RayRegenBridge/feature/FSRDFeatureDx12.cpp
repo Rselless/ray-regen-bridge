@@ -38,6 +38,15 @@ constexpr const char* UseHWDepth = "DLSS.Use.HW.Depth";        // 0 = linear, 1 
 constexpr const char* DenoiseMode = "DLSS.Denoise.Mode";
 constexpr const char* ColorBeforeParticles = "DLSSD.ColorBeforeParticles";
 constexpr const char* ColorBeforeTransparency = "DLSSD.ColorBeforeTransparency";
+constexpr const char* ColorBeforeFog = "DLSSD.ColorBeforeFog";
+constexpr const char* DiffuseRayDirectionHitDistance = "DLSSD.DiffuseRayDirectionHitDistance"; // hit distance in .w
+constexpr const char* Emissive = "GBuffer.Emissive";
+constexpr const char* ReduceGhostMask = "DLSS.Input.Reduce.Ghost.Mask";
+constexpr const char* SssGuide = "DLSSD.ScreenSpaceSubsurfaceScatteringGuide";
+constexpr const char* TransparencyLayer = "DLSS.TransparencyLayer";
+constexpr const char* TransparencyLayerOpacity = "DLSS.TransparencyLayerOpacity";
+constexpr const char* PreExposure = "DLSS.Pre.Exposure";     // float, the color is multiplied by it
+constexpr const char* ExposureScale = "DLSS.Exposure.Scale"; // float, logged only
 } // namespace DlssdKeys
 
 // Must match the defines in fsrd_common.hlsli
@@ -48,6 +57,26 @@ constexpr uint32_t FlagParticleLayer = 0x8;
 constexpr uint32_t FlagCountSentinels = 0x10;
 constexpr uint32_t FlagLinearDepth = 0x20;
 constexpr uint32_t FlagTransparencyLayer = 0x40;
+constexpr uint32_t FlagNormalsUnorm = 0x80;
+constexpr uint32_t FlagSssGuide = 0x100;
+constexpr uint32_t FlagLayerOpacity = 0x200;
+constexpr uint32_t FlagDiffuseHit = 0x400;
+constexpr uint32_t FlagDiffuseHitInW = 0x800;
+
+// Normals stored as UNORM (xyz = 2 * v - 1 to decode); float and SNORM formats are already signed
+static bool IsUnormNormals(DXGI_FORMAT format)
+{
+    switch (format)
+    {
+    case DXGI_FORMAT_R10G10B10A2_UNORM:
+    case DXGI_FORMAT_R8G8B8A8_UNORM:
+    case DXGI_FORMAT_B8G8R8A8_UNORM:
+    case DXGI_FORMAT_R16G16B16A16_UNORM:
+        return true;
+    default:
+        return false;
+    }
+}
 
 // Scratch format for the denoiser signals and the packed normals (FFX's preferred signal format)
 constexpr DXGI_FORMAT ScratchFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
@@ -603,6 +632,17 @@ void FSRDFeatureDx12::LogInputsOnce(NVSDK_NGX_Parameter* InParameters)
                                           "DLSSD.ColorAfterFog",
                                           "DLSSD.ResponsivityMask",
                                           "DLSSD.Alpha",
+                                          DlssdKeys::SssGuide,
+                                          "DLSSD.DepthOfFieldGuide",
+                                          DlssdKeys::TransparencyLayer,
+                                          DlssdKeys::TransparencyLayerOpacity,
+                                          "DLSS.TransparencyLayerMvecs",
+                                          "DLSS.DisocclusionMask",
+                                          "GBuffer.Attrib.15",
+                                          "ExposureTexture",
+                                          DlssdKeys::ReduceGhostMask,
+                                          "MotionVectorsReflection",
+                                          "GBuffer.IndirectAlbedo",
                                           "GBuffer.Albedo",
                                           "GBuffer.Emissive",
                                           "GBuffer.SpecularMvec",
@@ -651,6 +691,15 @@ void FSRDFeatureDx12::LogInputsOnce(NVSDK_NGX_Parameter* InParameters)
     InParameters->Get(NVSDK_NGX_Parameter_MV_Scale_Y, &mvScaleY);
     LOG_INFO("  MV scale: {}x{}, LowResMV: {}, DepthInverted: {}, HW depth: {}, roughness packed: {}", mvScaleX,
              mvScaleY, LowResMV(), DepthInverted(), _hwDepth, _roughnessPacked);
+
+    float preExposure = -1.0f, exposureScale = -1.0f;
+    const bool hasPre = InParameters->Get(DlssdKeys::PreExposure, &preExposure) == NVSDK_NGX_Result_Success;
+    const bool hasScale = InParameters->Get(DlssdKeys::ExposureScale, &exposureScale) == NVSDK_NGX_Result_Success;
+    LOG_INFO("  {}: {}, {}: {}", DlssdKeys::PreExposure, hasPre ? std::to_string(preExposure) : "not sent",
+             DlssdKeys::ExposureScale, hasScale ? std::to_string(exposureScale) : "not sent");
+
+    if (auto normals = GetResource(InParameters, DlssdKeys::Normals); normals != nullptr)
+        LOG_INFO("  Normals decoded as {}", IsUnormNormals(normals->GetDesc().Format) ? "UNORM (2v - 1)" : "signed");
 }
 
 bool FSRDFeatureDx12::InitInternal(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters)
@@ -682,9 +731,9 @@ bool FSRDFeatureDx12::InitInternal(ID3D12GraphicsCommandList* InCommandList, NVS
     _validation = Config::Instance()->FsrdValidation.value_or_default();
     _directSignals = Config::Instance()->FsrdSignalType.value_or_default() == 1;
 
-    _prepass = std::make_unique<FsrdPass_Dx12>("FSRD Prepass", Device, 8, 6, fsrd_prepass_cso, sizeof(fsrd_prepass_cso));
+    _prepass = std::make_unique<FsrdPass_Dx12>("FSRD Prepass", Device, 11, 6, fsrd_prepass_cso, sizeof(fsrd_prepass_cso));
     _compose =
-        std::make_unique<FsrdPass_Dx12>("FSRD Compose", Device, 10, 2, fsrd_compose_cso, sizeof(fsrd_compose_cso));
+        std::make_unique<FsrdPass_Dx12>("FSRD Compose", Device, 13, 2, fsrd_compose_cso, sizeof(fsrd_compose_cso));
     _particlesPass = std::make_unique<FsrdPass_Dx12>("FSRD Particles", Device, 2, 1, fsrd_particles_cso,
                                                      sizeof(fsrd_particles_cso));
     // Diagnostics only, the denoiser works without it
@@ -749,6 +798,47 @@ bool FSRDFeatureDx12::GatherInputs(NVSDK_NGX_Parameter* InParameters, FrameInput
     in.specularHitDistance = GetResource(InParameters, DlssdKeys::SpecularHitDistance);
     in.particles = GetParticleLayer(InParameters, in.color);
     in.beforeTransparency = GetTransparencyLayer(InParameters, in.color);
+    in.sssGuide = GetResource(InParameters, DlssdKeys::SssGuide);
+    in.emissive = GetResource(InParameters, DlssdKeys::Emissive);
+    in.ghostMask = GetResource(InParameters, DlssdKeys::ReduceGhostMask);
+
+    // Diffuse hit distance when the game traces and sends it, else the constant DiffuseHitDistance
+    in.diffuseHit = GetResource(InParameters, DlssdKeys::DiffuseHitDistance);
+
+    if (in.diffuseHit == nullptr)
+    {
+        in.diffuseHit = GetResource(InParameters, DlssdKeys::DiffuseRayDirectionHitDistance);
+        in.diffuseHitInW = in.diffuseHit != nullptr;
+    }
+
+    // Games that render transparencies into a separate layer (DLSS.TransparencyLayer + opacity) instead of sending
+    // the color before them: the layer goes over the denoised color like Cyberpunk's particle layer
+    if (in.beforeTransparency == nullptr && in.particles == nullptr && in.color != nullptr &&
+        Config::Instance()->FsrdTransparencyLayer.value_or_default() == 1)
+    {
+        auto layer = GetResource(InParameters, DlssdKeys::TransparencyLayer);
+
+        if (layer != nullptr && layer->GetDesc().Width >= in.color->GetDesc().Width &&
+            layer->GetDesc().Height >= in.color->GetDesc().Height)
+        {
+            in.particles = layer;
+            in.layerOpacity = GetResource(InParameters, DlssdKeys::TransparencyLayerOpacity);
+        }
+    }
+
+    float preExposure = 1.0f;
+
+    if (InParameters->Get(DlssdKeys::PreExposure, &preExposure) == NVSDK_NGX_Result_Success && preExposure > 0.0f &&
+        std::isfinite(preExposure))
+    {
+        in.preExposure = preExposure;
+    }
+
+    if (std::abs(in.preExposure - _lastPreExposure) > 0.02f * _lastPreExposure)
+    {
+        LOG_INFO("Pre-exposure: {}", in.preExposure);
+        _lastPreExposure = in.preExposure;
+    }
 
     if (in.color == nullptr || in.motionVectors == nullptr || in.depth == nullptr || in.normals == nullptr ||
         in.diffuseAlbedo == nullptr || in.specularAlbedo == nullptr)
@@ -800,6 +890,7 @@ bool FSRDFeatureDx12::GatherInputs(NVSDK_NGX_Parameter* InParameters, FrameInput
     memcpy(in.view, &view, sizeof(in.view));
     memcpy(in.projection, &projection, sizeof(in.projection));
     in.separateRoughness = !_roughnessPacked && in.roughness != nullptr;
+    in.normalsUnorm = IsUnormNormals(in.normals->GetDesc().Format);
     return true;
 }
 
@@ -842,7 +933,11 @@ FsrdPass_Dx12::Constants FSRDFeatureDx12::BuildConstants(const FrameInputs& in, 
                       (in.specularHitDistance != nullptr ? FlagHasSpecHitDistance : 0) |
                       (DepthInverted() ? FlagDepthInverted : 0) | (in.particles != nullptr ? FlagParticleLayer : 0) |
                       (_hwDepth ? 0 : FlagLinearDepth) |
-                      (in.beforeTransparency != nullptr ? FlagTransparencyLayer : 0);
+                      (in.beforeTransparency != nullptr ? FlagTransparencyLayer : 0) |
+                      (in.normalsUnorm ? FlagNormalsUnorm : 0) | (in.sssGuide != nullptr ? FlagSssGuide : 0) |
+                      (in.particles != nullptr && in.layerOpacity != nullptr ? FlagLayerOpacity : 0) |
+                      (in.diffuseHit != nullptr ? FlagDiffuseHit : 0) | (in.diffuseHitInW ? FlagDiffuseHitInW : 0);
+    constants.PreExposure = in.preExposure;
     constants.RenderWidth = in.renderWidth;
     constants.RenderHeight = in.renderHeight;
     constants.SkyDepth = SkyDepth;
@@ -910,7 +1005,8 @@ bool FSRDFeatureDx12::RunPrepass(ID3D12GraphicsCommandList* InCommandList, const
                                        { in.beforeTransparency != nullptr ? in.beforeTransparency : in.color,
                                          in.diffuseAlbedo, in.specularAlbedo, in.normals,
                                          in.separateRoughness ? in.roughness : nullptr, in.depth,
-                                         in.specularHitDistance, in.motionVectors },
+                                         in.specularHitDistance, in.motionVectors, in.sssGuide, in.diffuseHit,
+                                         in.emissive },
                                        { _diffuseIn, _specularIn, _linearDepth, _packedNormals, _motionVectors,
                                          _sentinelCounter },
                                        constants, in.renderWidth, in.renderHeight);
@@ -1063,7 +1159,7 @@ bool FSRDFeatureDx12::RunCompose(ID3D12GraphicsCommandList* InCommandList, NVSDK
     const bool ok = _compose->Dispatch(InCommandList,
                                        { in.color, in.diffuseAlbedo, in.specularAlbedo, in.depth, _diffuseOut,
                                          _specularOut, gameReactive, _packedNormals, in.particles,
-                                         in.beforeTransparency },
+                                         in.beforeTransparency, in.layerOpacity, in.emissive, in.ghostMask },
                                        { _composedColor, _reactiveMask }, constants, (UINT) composedDesc.Width,
                                        composedDesc.Height);
 
@@ -1157,28 +1253,33 @@ ID3D12Resource* FSRDFeatureDx12::GetParticleLayer(NVSDK_NGX_Parameter* InParamet
 ID3D12Resource* FSRDFeatureDx12::GetTransparencyLayer(NVSDK_NGX_Parameter* InParameters, ID3D12Resource* color)
 {
     // Games like The Witcher 3 send the image before transparencies (fog, glass, particles) in
-    // DLSSD.ColorBeforeTransparency. Denoising that one keeps fog out of the denoiser, which filters it away.
+    // DLSSD.ColorBeforeTransparency, others the image before fog in DLSSD.ColorBeforeFog. Denoising that one keeps
+    // fog out of the denoiser, which filters it away; compose adds Color minus it back.
     ID3D12Resource* before = nullptr;
+    int mode = 0; // 0 off, 1 before transparency, 2 before fog
 
     if (Config::Instance()->FsrdTransparencyLayer.value_or_default() == 1 && color != nullptr)
     {
-        before = GetResource(InParameters, DlssdKeys::ColorBeforeTransparency);
+        const auto colorDesc = color->GetDesc();
+        const char* keys[] = { DlssdKeys::ColorBeforeTransparency, DlssdKeys::ColorBeforeFog };
 
-        if (before != nullptr)
+        for (int i = 0; i < 2 && before == nullptr; i++)
         {
-            auto colorDesc = color->GetDesc();
-            auto beforeDesc = before->GetDesc();
+            auto candidate = GetResource(InParameters, keys[i]);
 
-            if (beforeDesc.Width < colorDesc.Width || beforeDesc.Height < colorDesc.Height)
-                before = nullptr;
+            if (candidate != nullptr && candidate->GetDesc().Width >= colorDesc.Width &&
+                candidate->GetDesc().Height >= colorDesc.Height)
+            {
+                before = candidate;
+                mode = i + 1;
+            }
         }
     }
 
-    const int mode = before != nullptr ? 1 : 0;
-
     if (mode != _lastTransparencyLayer)
     {
-        LOG_INFO("Transparency layer: {}", mode == 0 ? "off" : "denoising the color before transparency");
+        const char* names[] = { "off", "denoising the color before transparency", "denoising the color before fog" };
+        LOG_INFO("Transparency layer: {}", names[mode]);
         _lastTransparencyLayer = mode;
         _resetDenoiserHistory = true;
     }
@@ -1264,10 +1365,11 @@ bool FSRDFeatureDx12::EvaluateInternal(ID3D12GraphicsCommandList* InCommandList,
     // game's reactive mask is kept, ours isn't written.
     bool gameReactiveOnly = false;
 
-    // Same for DLSSD.ColorBeforeTransparency
+    // Same for DLSSD.ColorBeforeTransparency, or DLSSD.ColorBeforeFog when the game sends that one instead
     const std::pair<int, const char*> rawLayers[] = {
         { Config::Instance()->FsrdParticleLayer.value_or_default(), DlssdKeys::ColorBeforeParticles },
         { Config::Instance()->FsrdTransparencyLayer.value_or_default(), DlssdKeys::ColorBeforeTransparency },
+        { Config::Instance()->FsrdTransparencyLayer.value_or_default(), DlssdKeys::ColorBeforeFog },
     };
 
     for (const auto& [mode, key] : rawLayers)

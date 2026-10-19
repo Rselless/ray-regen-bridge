@@ -49,6 +49,7 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     int _lastSentinelMode = -1;
     int _lastParticleLayer = -1;
     int _lastTransparencyLayer = -1;
+    float _lastPreExposure = 0.0f;
     bool _wasBypassed = false;
 
     // Previous frame's WorldToViewMatrix, for cameraPositionDelta and the MV depth delta
@@ -110,6 +111,14 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
         ID3D12Resource* specularHitDistance = nullptr;
         ID3D12Resource* particles = nullptr; // DLSSD.ColorBeforeParticles when the particle layer is on
         ID3D12Resource* beforeTransparency = nullptr; // DLSSD.ColorBeforeTransparency when the transparency layer is on
+        ID3D12Resource* layerOpacity = nullptr; // DLSS.TransparencyLayerOpacity when particles is DLSS.TransparencyLayer
+        ID3D12Resource* sssGuide = nullptr;     // DLSSD.ScreenSpaceSubsurfaceScatteringGuide (skin)
+        ID3D12Resource* diffuseHit = nullptr;   // DLSSD.DiffuseHitDistance, or DiffuseRayDirectionHitDistance (.w)
+        bool diffuseHitInW = false;
+        ID3D12Resource* emissive = nullptr;     // GBuffer.Emissive, kept out of the denoiser
+        ID3D12Resource* ghostMask = nullptr;    // DLSS.Input.Reduce.Ghost.Mask, added to the reactive mask
+        bool normalsUnorm = false;
+        float preExposure = 1.0f;
         unsigned int renderWidth = 0;
         unsigned int renderHeight = 0;
         float view[4][4] {};       // WorldToViewMatrix, row-vector

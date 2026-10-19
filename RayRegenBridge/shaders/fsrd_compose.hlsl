@@ -20,6 +20,10 @@ Texture2D<float4> Particles : register(t8); // DLSSD.ColorBeforeParticles: steam
                                             // coverage, used with FLAG_PARTICLE_LAYER
 Texture2D<float4> BeforeTransparency : register(t9); // DLSSD.ColorBeforeTransparency, used with
                                                      // FLAG_TRANSPARENCY_LAYER
+Texture2D<float> LayerOpacity : register(t10); // DLSS.TransparencyLayerOpacity, coverage of the layer in t8 with
+                                               // FLAG_LAYER_OPACITY
+Texture2D<float4> Emissive : register(t11);    // GBuffer.Emissive, the prepass kept it out of the signals
+Texture2D<float> GhostMask : register(t12);    // DLSS.Input.Reduce.Ghost.Mask, goes into the reactive mask
 
 RWTexture2D<float4> Output : register(u0);
 RWTexture2D<float> Reactive : register(u1);
@@ -40,13 +44,19 @@ float3 AddTransparency(float3 denoised, float3 color, int3 p)
     return max(denoised + (color - before), 0.0f);
 }
 
-// Puts the game's particle layer over a color: color * transmittance + particles (premultiplied)
+// Puts the game's particle / transparency layer over a color: color * transmittance + layer (premultiplied).
+// Coverage is the layer's alpha, or the separate opacity texture games send with DLSS.TransparencyLayer.
 float3 OverParticles(float3 c, int3 p, inout float reactive)
 {
     if ((Flags & FLAG_PARTICLE_LAYER) == 0)
         return c;
 
-    return OverParticleLayer(c, Particles.Load(p), reactive);
+    float4 layer = Particles.Load(p);
+
+    if (Flags & FLAG_LAYER_OPACITY)
+        layer.a = LayerOpacity.Load(p);
+
+    return OverParticleLayer(c, layer, reactive);
 }
 
 [numthreads(16, 16, 1)]
@@ -68,7 +78,9 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
         return;
     }
 
-    float gameReactive = saturate(GameReactive.Load(p) * GameMaskBias);
+    // Null textures read 0, so games that send neither mask are unaffected
+    float gameReactive = max(saturate(GameReactive.Load(p) * GameMaskBias), saturate(GhostMask.Load(p)));
+    const float3 emissive = max(Emissive.Load(p).rgb, 0.0f);
 
     const float3 diffuseAlbedo = DiffuseAlbedo.Load(p).rgb;
     const float3 specularAlbedo = SpecularAlbedo.Load(p).rgb;
@@ -82,7 +94,8 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
         const float3 denoised = DiffuseDenoised.Load(p).rgb;
         const bool diffuse = SentinelMode == SENTINEL_DIFFUSE && IsFinite3(denoised) && IsFinite3(color.rgb);
 
-        const float3 sentinelColor = diffuse ? AddTransparency(max(denoised, 0.0f), color.rgb, p) : color.rgb;
+        const float3 sentinelColor =
+            diffuse ? AddTransparency(max(denoised, 0.0f) * PreExposure + emissive, color.rgb, p) : color.rgb;
         Output[DTid.xy] = float4(OverParticles(sentinelColor, p, gameReactive), color.a);
         Reactive[DTid.xy] = gameReactive;
         return;
@@ -98,8 +111,9 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
         return;
     }
 
-    float3 specular = max(SpecularDenoised.Load(p).rgb * sMod, 0.0f);
-    float3 composed = max(DiffuseDenoised.Load(p).rgb * dMod, 0.0f) + specular;
+    // Back to the game's pre-exposed units
+    float3 specular = max(SpecularDenoised.Load(p).rgb * sMod, 0.0f) * PreExposure;
+    float3 composed = max(DiffuseDenoised.Load(p).rgb * dMod, 0.0f) * PreExposure + specular;
 
     if (!IsFinite3(composed))
     {
@@ -110,7 +124,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
 
     float specularShare = saturate(dot(specular, LumaWeights) / max(dot(composed, LumaWeights), 1e-4f));
     float smoothness = 1.0f - smoothstep(0.1f, 0.5f, packedNormals.z);
-    composed = AddTransparency(composed, color.rgb, p);
+    composed = AddTransparency(composed + emissive, color.rgb, p);
 
     float reactive = max(gameReactive, saturate(ReflectionReactive * specularShare * smoothness));
     Output[DTid.xy] = float4(OverParticles(composed, p, reactive), color.a);
