@@ -311,11 +311,11 @@ class Config
     // Texels farther than this (view Z, meters) skip the denoiser and keep the game's color (distant fog), 0 = off
     CustomOptional<float> FsrdFarPassthrough { 0.0f };
     // Below this roughness the game's raw specular replaces the denoised one (mirrors, puddles), 0 = off
-    CustomOptional<float> FsrdMirrorPassthrough { 0.2f };
+    CustomOptional<float> FsrdMirrorPassthrough { 0.0f };
     // Exponent on the albedo the color is divided by before denoising: 1 = full, 0 = none (keeps fog and haze)
     CustomOptional<float> FsrdDemodulation { 1.0f };
     // Distance (view Z, meters) where demodulation has faded to 0 (distant fog stays fog), 0 = off
-    CustomOptional<float> FsrdDemodFadeDistance { 25.0f };
+    CustomOptional<float> FsrdDemodFadeDistance { 0.0f };
     // RCAS sharpness applied when neither the game nor the user sets one (the denoiser softens fine detail)
     CustomOptional<float> FsrdDefaultSharpness { 0.25f };
     // Periodic probe log of the inputs (hit distance, depth, normals, albedos) outside captures
