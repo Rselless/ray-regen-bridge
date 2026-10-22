@@ -48,7 +48,6 @@ Ganchos no código do OptiScaler:
 
 1. Visual Studio 2022+ com "Desenvolvimento para desktop com C++" (toolset v145 testado).
 2. Clonar com submódulos: `git clone --recurse-submodules` e abrir `OptiScaler.sln`.
-   SDKs e binários de licença fechada não ficam no repositório: copiar do [OptiScaler](https://github.com/optiscaler/OptiScaler) para as mesmas pastas `external/nvngx_dlss_sdk/`, `external/directx_agility_sdk/`, `OptiScaler/library/d3dx/`, os `D3DX11*.h` de `OptiScaler/include/d3dx/` e os executáveis/DLLs de `OptiScaler/shaders/shader_tools/` (dxc, fxc).
 3. Compilar em **Release x64**.
 4. Copiar o `OptiScaler.dll` gerado para a pasta do jogo (`Cyberpunk 2077\bin\x64`) com o nome `winmm.dll`, junto do `OptiScaler.ini` e de `amd_fidelityfx_denoiser_dx12.dll`, `amd_fidelityfx_upscaler_dx12.dll` e `amd_fidelityfx_dx12.dll`.
 5. No jogo: Path Tracing ou Ray Tracing ligado, DLSS como upscaler e Ray Reconstruction ligado.

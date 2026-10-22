@@ -467,7 +467,7 @@ sl.*.dll
 # Ray Regen Bridge: launcher + payload ready to copy (Launcher.vcxproj)
 dist/
 
-# OptiScaler upstream docs and scripts: kept locally, not part of this repo
+# OptiScaler upstream docs: kept locally, not part of this repo
 /Changelog.md
 /CONTRIBUTING.md
 /Config.md
@@ -475,14 +475,3 @@ dist/
 /Issues.md
 /Spoofing.md
 /images/
-/Streamlined_fetcher_windows.bat
-/setup_linux.sh
-/setup_windows.bat
-
-# Proprietary SDKs and binaries (NVIDIA, Microsoft): kept locally for the build, not redistributed
-/external/nvngx_dlss_sdk/
-/external/directx_agility_sdk/
-/OptiScaler/library/d3dx/
-/OptiScaler/include/d3dx/D3DX11*.h
-/OptiScaler/shaders/shader_tools/*.exe
-/OptiScaler/shaders/shader_tools/*.dll
