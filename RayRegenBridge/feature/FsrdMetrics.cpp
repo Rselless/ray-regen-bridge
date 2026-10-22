@@ -322,11 +322,14 @@ void FsrdMetrics::Summarize()
     const double clampShare = active > 0 ? clamped / active : 0.0;
     const double skinShare = texels > 0 ? skin / texels : 0.0;
 
+    // Shares as percentages (std::format has no % presentation type)
     FsrdRemote::Status(std::format(
-        "metrics t={:.0f}s frames={} gain {:+.1%} (tiles >+15% {:.0%}, <-15% {:.0%}, worst {:+.0%} at {},{}) "
-        "color shift {:.3f} (tiles >0.05 {:.0%}) clamped {:.2%} noise {:.2f} flicker {:.3f} (input {:.3f}) skin {:.1%}",
-        seconds, frames, medianGain, bright, dark, std::exp2(worstGain) - 1.0, worstX, worstY, medianShift, shiftsHigh,
-        clampShare, medianNoise, medianFlicker, medianFlickerIn, skinShare));
+        "metrics t={:.0f}s frames={} gain {:+.1f}% (tiles >+15% {:.0f}%, <-15% {:.0f}%, worst {:+.0f}% at {},{}) "
+        "color shift {:.3f} (tiles >0.05 {:.0f}%) clamped {:.2f}% noise {:.2f} flicker {:.3f} (input {:.3f}) "
+        "skin {:.1f}%",
+        seconds, frames, medianGain * 100.0, bright * 100.0, dark * 100.0, (std::exp2(worstGain) - 1.0) * 100.0,
+        worstX, worstY, medianShift, shiftsHigh * 100.0, clampShare * 100.0, medianNoise, medianFlicker,
+        medianFlickerIn, skinShare * 100.0));
 
     const auto csv = FsrdRemote::Folder() / "metrics.csv";
     std::ofstream out(csv, std::ios::app);
