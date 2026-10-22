@@ -78,9 +78,9 @@ Seção `[FSRD]` do `OptiScaler.ini`; a maioria também aparece no menu do OptiS
 | `MaxRadiance` | `100` | Teto do sinal do denoiser; sem ele (65504, padrão da AMD) a névoa e a luz sobre superfícies escuras viram um brilho chapado |
 | `TransparencyLayer` | `1` | Jogos que mandam a imagem antes das transparências (Witcher 3): fumaça, fogo e vidro voltam por cima sem denoise |
 | `FarPassthrough` | `0` (desligado) | Distância em metros a partir da qual a cena pula o denoiser e mantém a névoa distante do jogo |
-| `MirrorPassthrough` | `0.1` | Abaixo dessa roughness o reflexo do jogo passa sem denoise (poças, cromado, vidro); sem a distância dos reflexos, o denoiser borra espelhos. `0` desliga |
+| `MirrorPassthrough` | `0.2` | Abaixo dessa roughness o reflexo do jogo passa sem denoise (poças, cromado, vidro); sem a distância dos reflexos, o denoiser borra espelhos. `0` desliga |
 | `Demodulation` | `1.0` | Quanto a cor é dividida pelo albedo antes do denoise: `1` preserva mais a textura, mas a névoa vira luz pintada nas superfícies; menos mantém a névoa |
-| `DemodFadeDistance` | `50` | Distância (m) em que a `Demodulation` chega a 0, começando na metade dela: a névoa distante continua névoa. `0` desliga |
+| `DemodFadeDistance` | `25` | Distância (m) em que a `Demodulation` chega a 0, começando na metade dela: a névoa distante continua névoa. `0` desliga |
 | `DefaultSharpness` | `0.25` | Nitidez RCAS quando nem o jogo nem o override de Sharpness definem uma |
 | `StabilityBias`, `RadianceClipStdK`, `KernelRelaxation` | padrão da AMD | Ajuste fino do denoiser |
 
