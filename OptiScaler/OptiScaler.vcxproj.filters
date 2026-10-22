@@ -1632,6 +1632,12 @@
     <ClInclude Include="..\RayRegenBridge\feature\FsrdFrameDump.h">
       <Filter>RayRegenBridge</Filter>
     </ClInclude>
+    <ClInclude Include="..\RayRegenBridge\feature\FsrdRemote.h">
+      <Filter>RayRegenBridge</Filter>
+    </ClInclude>
+    <ClInclude Include="..\RayRegenBridge\feature\FsrdMetrics.h">
+      <Filter>RayRegenBridge</Filter>
+    </ClInclude>
     <ClInclude Include="..\RayRegenBridge\feature\FsrdUtil.h">
       <Filter>RayRegenBridge</Filter>
     </ClInclude>
@@ -1656,6 +1662,9 @@
     <ClInclude Include="..\RayRegenBridge\shaders\fsrd_dump_Shader.h">
       <Filter>RayRegenBridge</Filter>
     </ClInclude>
+    <ClInclude Include="..\RayRegenBridge\shaders\fsrd_metrics_Shader.h">
+      <Filter>RayRegenBridge</Filter>
+    </ClInclude>
     <ClCompile Include="..\RayRegenBridge\feature\FSRDFeatureDx12.cpp">
       <Filter>RayRegenBridge</Filter>
     </ClCompile>
@@ -1663,6 +1672,12 @@
       <Filter>RayRegenBridge</Filter>
     </ClCompile>
     <ClCompile Include="..\RayRegenBridge\feature\FsrdFrameDump.cpp">
+      <Filter>RayRegenBridge</Filter>
+    </ClCompile>
+    <ClCompile Include="..\RayRegenBridge\feature\FsrdRemote.cpp">
+      <Filter>RayRegenBridge</Filter>
+    </ClCompile>
+    <ClCompile Include="..\RayRegenBridge\feature\FsrdMetrics.cpp">
       <Filter>RayRegenBridge</Filter>
     </ClCompile>
     <ClCompile Include="..\RayRegenBridge\feature\FsrdPass_Dx12.cpp">

@@ -18,6 +18,7 @@
 #include "FsrdPass_Dx12.h"
 #include "FsrdProbe.h"
 #include "FsrdFrameDump.h"
+#include "FsrdMetrics.h"
 #include <array>
 #include <memory>
 #include <vector>
@@ -81,6 +82,7 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     std::unique_ptr<FsrdPass_Dx12> _particlesPass; // particle layer over the game's color (bypass)
     std::unique_ptr<FsrdProbe> _probe; // diagnostics, null when the denoiser is off
     std::unique_ptr<FsrdFrameDump> _frameDump; // diagnostics: whole frame of every stage to files
+    std::unique_ptr<FsrdMetrics> _metrics;     // diagnostics: live summary per second, off unless enabled
 
     // Replaced resources and denoiser contexts, released RetireFrames evaluations later (the GPU can still be
     // running work that uses them)

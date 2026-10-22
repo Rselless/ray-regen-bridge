@@ -48,7 +48,8 @@ class FsrdPass_Dx12 : public Shader_Dx12
         float Demodulation;
 
         float DemodFadeDistance;
-        float Pad4[3];
+        float MaxRadiance;
+        float Pad4[2];
     };
 
   private:

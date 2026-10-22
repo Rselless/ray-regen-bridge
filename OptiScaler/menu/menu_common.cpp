@@ -35,6 +35,7 @@
 #include <type_traits>
 #include <misc/IdentifyGpu.h>
 #include <RayRegenBridge/feature/FSRDFeatureDx12.h>
+#include <RayRegenBridge/feature/FsrdRemote.h>
 #include <hooks/Xell_Hooks.h>
 #include <low_latency/input/input_common.h>
 
@@ -1625,12 +1626,64 @@ static FsrdProbe* ProbeCaptureFeature()
     return nullptr;
 }
 
-static bool ProbeCaptureOverlayNeeded() { return ProbeCaptureFeature() != nullptr; }
+// FSRD frame dump running, if any
+static FsrdFrameDump* FrameDumpFeature()
+{
+    auto fsrd = dynamic_cast<FSRDFeatureDx12*>(State::Instance().currentFeature);
+    auto dump = fsrd != nullptr ? fsrd->FrameDump() : nullptr;
+    return dump != nullptr && dump->Busy() ? dump : nullptr;
+}
+
+static bool ProbeCaptureOverlayNeeded()
+{
+    return ProbeCaptureFeature() != nullptr || FrameDumpFeature() != nullptr || !FsrdRemote::Message().empty();
+}
+
+// Messages from FsrdRemote (tests driven from outside the game) and frame dump progress, top of the screen
+static void RenderRemoteOverlay(float scale, ImGuiIO& io, ImGuiWindowFlags flags)
+{
+    const auto message = FsrdRemote::Message();
+    auto dump = FrameDumpFeature();
+
+    if (message.empty() && dump == nullptr)
+        return;
+
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, 70.0f * scale), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.8f);
+
+    if (ImGui::Begin("##FsrdRemoteOverlay", nullptr, flags))
+    {
+        ImGui::SetWindowFontScale(1.5f);
+
+        if (!message.empty())
+            ImGui::TextColored(ImVec4(1.f, 0.85f, 0.2f, 1.f), "RRB: %s", message.c_str());
+
+        if (dump != nullptr)
+        {
+            if (const float countdown = dump->Countdown(); countdown > 0.0f)
+                ImGui::TextColored(ImVec4(1.f, 0.8f, 0.f, 1.f), "RRB capture starts in %.1f s", countdown);
+            else if (dump->Taken() < dump->Requested())
+                ImGui::TextColored(ImVec4(0.3f, 0.8f, 1.f, 1.f), "RRB capturing %d/%d", dump->Taken(),
+                                   dump->Requested());
+            else
+                ImGui::TextColored(ImVec4(0.3f, 0.8f, 1.f, 1.f), "RRB writing capture...");
+        }
+    }
+
+    ImGui::End();
+}
 
 void MenuCommon::RenderProbeCaptureOverlay(RenderMenuContext& ctx)
 {
     if (!ctx.newFrame)
         return;
+
+    {
+        const ImGuiWindowFlags remoteFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                                             ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoFocusOnAppearing |
+                                             ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoSavedSettings;
+        RenderRemoteOverlay(std::max(ctx.menuResScale, 1.0f), ctx.io, remoteFlags);
+    }
 
     auto fsrd = ProbeCaptureFeature();
 
@@ -2965,34 +3018,66 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                 if (auto dump = fsrdFeature != nullptr ? fsrdFeature->FrameDump() : nullptr; dump != nullptr)
                 {
                     static char dumpLabel[32] = "scene";
+                    static int dumpMode = 0;
+                    const char* dumpModes[] = { "One frame", "Sequence 10 s", "Burst 32 frames" };
+
                     ImGui::PushItemWidth(120.0f * menuResScale);
                     ImGui::InputText("##FrameDumpLabel", dumpLabel, sizeof(dumpLabel));
+                    ImGui::SameLine();
+                    ImGui::Combo("##FrameDumpMode", &dumpMode, dumpModes, IM_ARRAYSIZE(dumpModes));
                     ImGui::PopItemWidth();
                     ImGui::SameLine();
 
-                    if (dump->Pending())
+                    if (dump->Busy())
                     {
-                        ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)),
-                                           "Frame in %.1f s, close the menu", dump->Countdown());
+                        if (const float countdown = dump->Countdown(); countdown > 0.0f)
+                            ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)), "Starts in %.1f s, close the menu",
+                                               countdown);
+                        else
+                            ImGui::TextColored(toneMapColor(ImVec4(0.3f, 0.8f, 1.f, 1.f)), "Capturing %d/%d",
+                                               dump->Taken(), dump->Requested());
                     }
-                    else if (ImGui::Button("Capture frame"))
+                    else if (ImGui::Button("Capture"))
                     {
-                        // The label is read by the render thread later, so it gets its own copy
-                        static std::string requestedLabel;
-                        requestedLabel = dumpLabel;
-                        std::replace_if(requestedLabel.begin(), requestedLabel.end(),
-                                        [](char c) { return !std::isalnum((unsigned char) c); }, '_');
-                        dump->Request(requestedLabel.c_str());
+                        FsrdFrameDump::Request request;
+                        request.label = dumpLabel;
+                        request.delaySeconds = FsrdFrameDump::MenuDelaySeconds;
+
+                        if (dumpMode == 1)
+                        {
+                            request.count = 20;
+                            request.intervalSeconds = 0.5f;
+                        }
+                        else if (dumpMode == 2)
+                        {
+                            request.count = 32;
+                            request.reduced = true;
+                        }
+
+                        dump->Start(request);
                     }
 
-                    ShowHelpMarker("Saves one whole frame of every stage (game inputs, denoiser\n"
-                                   "signals before and after, composed image) to RRB_Captures\n"
-                                   "next to OptiScaler.log, for offline analysis (~250 MB).\n"
-                                   "Taken 2 s after pressing: close the menu first.");
+                    ShowHelpMarker("Saves whole frames to RRB_Captures next to OptiScaler.log\n"
+                                   "for offline analysis (tools/analyze_capture.py).\n"
+                                   "One frame: every stage (game inputs, denoiser signals before\n"
+                                   "and after, composed image), ~250 MB.\n"
+                                   "Sequence: every stage of 20 frames, one every 0.5 s, ~5 GB.\n"
+                                   "Burst: 32 consecutive frames, color/composed/motion/depth only,\n"
+                                   "for flicker and ghosting, ~2 GB.\n"
+                                   "Starts 2 s after pressing: close the menu first.");
 
                     if (const auto folder = dump->LastFolder(); !folder.empty())
                         ImGui::TextWrapped("Last: %s", folder.c_str());
                 }
+
+                bool liveMetrics = FsrdMetrics::Enabled();
+                if (ImGui::Checkbox("Live metrics", &liveMetrics))
+                    FsrdMetrics::SetEnabled(liveMetrics);
+
+                ShowHelpMarker("Once per second writes a summary of the whole image to\n"
+                               "RRB_Captures\\status.txt, metrics.csv and the log: brightness and\n"
+                               "color change against the game's image, clamped signals,\n"
+                               "noise left and flicker. Costs well under 0.1 ms.");
 
                 bool diagnostics = config->FsrdDiagnostics.value_or_default();
                 if (ImGui::Checkbox("Diagnostics log", &diagnostics))

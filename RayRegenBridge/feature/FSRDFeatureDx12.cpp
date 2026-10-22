@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "FSRDFeatureDx12.h"
+#include "FsrdRemote.h"
 
 #include <Config.h>
 #include <Util.h>
@@ -186,7 +187,7 @@ FSRDFeatureDx12::~FSRDFeatureDx12()
     std::thread(
         [retired = std::move(_retired), prepass = std::move(_prepass), compose = std::move(_compose),
          particles = std::move(_particlesPass), probe = std::move(_probe),
-         frameDump = std::move(_frameDump)]() mutable
+         frameDump = std::move(_frameDump), metrics = std::move(_metrics)]() mutable
         {
             std::this_thread::sleep_for(std::chrono::seconds(2));
 
@@ -740,6 +741,7 @@ bool FSRDFeatureDx12::InitInternal(ID3D12GraphicsCommandList* InCommandList, NVS
     // Diagnostics only, the denoiser works without it
     _probe = std::make_unique<FsrdProbe>(Device);
     _frameDump = std::make_unique<FsrdFrameDump>(Device);
+    _metrics = std::make_unique<FsrdMetrics>(Device);
 
     if (!_prepass->CanRender() || !_compose->CanRender() || !_particlesPass->CanRender())
     {
@@ -749,6 +751,7 @@ bool FSRDFeatureDx12::InitInternal(ID3D12GraphicsCommandList* InCommandList, NVS
         _particlesPass.reset();
         _probe.reset();
         _frameDump.reset();
+        _metrics.reset();
         _denoiserDisabled = true;
     }
 
@@ -978,6 +981,8 @@ FsrdPass_Dx12::Constants FSRDFeatureDx12::BuildConstants(const FrameInputs& in, 
     constants.MirrorRoughness = std::clamp(config->FsrdMirrorPassthrough.value_or_default(), 0.0f, 1.0f);
     constants.Demodulation = std::clamp(config->FsrdDemodulation.value_or_default(), 0.0f, 1.0f);
     constants.DemodFadeDistance = std::max(config->FsrdDemodFadeDistance.value_or_default(), 0.0f);
+    constants.MaxRadiance =
+        config->FsrdMaxRadiance.has_value() ? config->FsrdMaxRadiance.value() : DefaultMaxRadiance;
 
     // Camera forward in world space: third column of the row-vector view rotation
     constants.CameraForward[0] = in.view[0][2];
@@ -1199,6 +1204,9 @@ void FSRDFeatureDx12::RunProbe(ID3D12GraphicsCommandList* InCommandList, const F
 
 ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters)
 {
+    // Commands from outside the game (RRB_Captures\command.txt): captures, option changes, messages
+    FsrdRemote::Tick(_frameDump.get(), _metrics.get());
+
     FrameInputs in {};
 
     if (!GatherInputs(InParameters, in))
@@ -1228,14 +1236,25 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
 
     RunProbe(InCommandList, in, constants);
     RunFrameDump(InCommandList, InParameters, in, constants);
+
+    if (_metrics != nullptr)
+        _metrics->Run(InCommandList, constants, in.color, _composedColor, _diffuseIn, _specularIn, _packedNormals);
+
     return _composedColor;
 }
 
 void FSRDFeatureDx12::RunFrameDump(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters,
                                    const FrameInputs& in, const FsrdPass_Dx12::Constants& constants)
 {
-    if (_frameDump == nullptr || (!_frameDump->Pending()))
+    if (_frameDump == nullptr || !_frameDump->Busy())
         return;
+
+    // Not every frame of a request is taken (sequences, files still being written): Run only writes then
+    if (!_frameDump->FrameDue())
+    {
+        _frameDump->Run(InCommandList, constants, {}, {});
+        return;
+    }
 
     auto* config = Config::Instance();
     auto tunable = [](const CustomOptional<float, NoDefault>& value)

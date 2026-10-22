@@ -46,7 +46,8 @@ cbuffer Params : register(b0)
     float Demodulation;       // exponent on the albedos the signals are divided by: 1 = full, 0 = none
 
     float DemodFadeDistance;  // view Z (meters) where Demodulation has faded to 0 (fog), 0 = off
-    float3 Pad4;
+    float MaxRadiance;        // metrics: the denoiser's clamp, signals above it are counted
+    float2 Pad4;
 };
 
 #define SENTINEL_PASSTHROUGH 0
