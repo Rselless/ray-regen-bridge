@@ -24,6 +24,7 @@ Texture2D<float> LayerOpacity : register(t10); // DLSS.TransparencyLayerOpacity,
                                                // FLAG_LAYER_OPACITY
 Texture2D<float4> Emissive : register(t11);    // GBuffer.Emissive, the prepass kept it out of the signals
 Texture2D<float> GhostMask : register(t12);    // DLSS.Input.Reduce.Ghost.Mask, goes into the reactive mask
+Texture2D<float4> SpecularInput : register(t13); // prepass specular signal (undenoised), used with MirrorRoughness
 
 RWTexture2D<float4> Output : register(u0);
 RWTexture2D<float> Reactive : register(u1);
@@ -113,6 +114,17 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
 
     // Back to the game's pre-exposed units
     float3 specular = max(SpecularDenoised.Load(p).rgb * sMod, 0.0f) * PreExposure;
+
+    // Mirrors (puddles, chrome, glass): without the game's specular hit distance the denoiser can't reproject a
+    // sharp reflection and averages it away. A single mirror ray is already almost clean, so it's kept as is.
+    if (MirrorRoughness > 0.0f)
+    {
+        const float4 raw = SpecularInput.Load(p);
+        const float mirror = 1.0f - smoothstep(0.5f * MirrorRoughness, MirrorRoughness, packedNormals.z);
+
+        if (mirror > 0.0f && raw.w >= 0.0f && IsFinite3(raw.rgb))
+            specular = lerp(specular, max(raw.rgb * sMod, 0.0f) * PreExposure, mirror);
+    }
     float3 composed = max(DiffuseDenoised.Load(p).rgb * dMod, 0.0f) * PreExposure + specular;
 
     if (!IsFinite3(composed))

@@ -424,6 +424,17 @@ bool Config::Reload(std::filesystem::path iniPath)
             if (auto setting = readFloat("FSRD", "FarPassthrough"); setting.has_value() && setting.value() >= 0.0f)
                 FsrdFarPassthrough.set_from_config(setting);
 
+            if (auto setting = readFloat("FSRD", "MirrorPassthrough");
+                setting.has_value() && setting.value() >= 0.0f && setting.value() <= 1.0f)
+                FsrdMirrorPassthrough.set_from_config(setting);
+
+            if (auto setting = readFloat("FSRD", "Demodulation");
+                setting.has_value() && setting.value() >= 0.0f && setting.value() <= 1.0f)
+                FsrdDemodulation.set_from_config(setting);
+
+            if (auto setting = readFloat("FSRD", "DemodFadeDistance"); setting.has_value() && setting.value() >= 0.0f)
+                FsrdDemodFadeDistance.set_from_config(setting);
+
             if (auto setting = readFloat("FSRD", "DefaultSharpness");
                 setting.has_value() && setting.value() >= 0.0f && setting.value() <= 1.0f)
                 FsrdDefaultSharpness.set_from_config(setting);
@@ -1270,6 +1281,11 @@ bool Config::SaveIni()
         ini.SetValue("FSRD", "TransparencyLayer",
                      GetIntValue(Instance()->FsrdTransparencyLayer.value_for_config()).c_str());
         ini.SetValue("FSRD", "FarPassthrough", GetFloatValue(Instance()->FsrdFarPassthrough.value_for_config()).c_str());
+        ini.SetValue("FSRD", "MirrorPassthrough",
+                     GetFloatValue(Instance()->FsrdMirrorPassthrough.value_for_config()).c_str());
+        ini.SetValue("FSRD", "Demodulation", GetFloatValue(Instance()->FsrdDemodulation.value_for_config()).c_str());
+        ini.SetValue("FSRD", "DemodFadeDistance",
+                     GetFloatValue(Instance()->FsrdDemodFadeDistance.value_for_config()).c_str());
         ini.SetValue("FSRD", "DefaultSharpness",
                      GetFloatValue(Instance()->FsrdDefaultSharpness.value_for_config()).c_str());
         ini.SetValue("FSRD", "Diagnostics", GetBoolValue(Instance()->FsrdDiagnostics.value_for_config()).c_str());

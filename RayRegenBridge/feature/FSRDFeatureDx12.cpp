@@ -733,7 +733,7 @@ bool FSRDFeatureDx12::InitInternal(ID3D12GraphicsCommandList* InCommandList, NVS
 
     _prepass = std::make_unique<FsrdPass_Dx12>("FSRD Prepass", Device, 11, 6, fsrd_prepass_cso, sizeof(fsrd_prepass_cso));
     _compose =
-        std::make_unique<FsrdPass_Dx12>("FSRD Compose", Device, 13, 2, fsrd_compose_cso, sizeof(fsrd_compose_cso));
+        std::make_unique<FsrdPass_Dx12>("FSRD Compose", Device, 14, 2, fsrd_compose_cso, sizeof(fsrd_compose_cso));
     _particlesPass = std::make_unique<FsrdPass_Dx12>("FSRD Particles", Device, 2, 1, fsrd_particles_cso,
                                                      sizeof(fsrd_particles_cso));
     // Diagnostics only, the denoiser works without it
@@ -972,6 +972,10 @@ FsrdPass_Dx12::Constants FSRDFeatureDx12::BuildConstants(const FrameInputs& in, 
                                       ? std::clamp(config->FsrdRoughnessOverride.value_or_default(), 0.0f, 1.0f)
                                       : -1.0f;
 
+    constants.MirrorRoughness = std::clamp(config->FsrdMirrorPassthrough.value_or_default(), 0.0f, 1.0f);
+    constants.Demodulation = std::clamp(config->FsrdDemodulation.value_or_default(), 0.0f, 1.0f);
+    constants.DemodFadeDistance = std::max(config->FsrdDemodFadeDistance.value_or_default(), 0.0f);
+
     // Camera forward in world space: third column of the row-vector view rotation
     constants.CameraForward[0] = in.view[0][2];
     constants.CameraForward[1] = in.view[1][2];
@@ -1163,7 +1167,7 @@ bool FSRDFeatureDx12::RunCompose(ID3D12GraphicsCommandList* InCommandList, NVSDK
     const bool ok = _compose->Dispatch(InCommandList,
                                        { in.color, in.diffuseAlbedo, in.specularAlbedo, in.depth, _diffuseOut,
                                          _specularOut, gameReactive, _packedNormals, in.particles,
-                                         in.beforeTransparency, in.layerOpacity, in.emissive, in.ghostMask },
+                                         in.beforeTransparency, in.layerOpacity, in.emissive, in.ghostMask, _specularIn },
                                        { _composedColor, _reactiveMask }, constants, (UINT) composedDesc.Width,
                                        composedDesc.Height);
 

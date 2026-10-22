@@ -44,7 +44,11 @@ class FsrdPass_Dx12 : public Shader_Dx12
 
         uint32_t CounterSlot;
         float PreExposure; // DLSS.Pre.Exposure the game's color is multiplied by, 1 when not sent
-        float Pad3[2];
+        float MirrorRoughness;
+        float Demodulation;
+
+        float DemodFadeDistance;
+        float Pad4[3];
     };
 
   private:

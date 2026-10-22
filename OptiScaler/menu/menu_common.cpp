@@ -2840,6 +2840,31 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                            "including its distant fog. Off denoises everything but the sky.\n"
                            "Too close a value leaves distant noise and a visible edge");
 
+            float mirrorPassthrough = config->FsrdMirrorPassthrough.value_or_default();
+            if (ImGui::SliderFloat("Mirror Passthrough", &mirrorPassthrough, 0.0f, 0.5f,
+                                   mirrorPassthrough > 0.0f ? "%.2f" : "Off"))
+                config->FsrdMirrorPassthrough = mirrorPassthrough;
+
+            ShowHelpMarker("Surfaces smoother than this roughness keep the game's own reflection\n"
+                           "(puddles, chrome, glass) instead of the denoised one, which blurs mirrors\n"
+                           "when the game sends no specular hit distance. Higher keeps more raw noise");
+
+            float demodulation = config->FsrdDemodulation.value_or_default();
+            if (ImGui::SliderFloat("Demodulation", &demodulation, 0.0f, 1.0f, "%.2f"))
+                config->FsrdDemodulation = demodulation;
+
+            ShowHelpMarker("How much the color is divided by the surface albedo before denoising\n"
+                           "1 keeps texture detail best, but fog and haze turn into light on the\n"
+                           "surfaces (flat, painted look). Lower keeps fog, softens textures");
+
+            float demodFade = config->FsrdDemodFadeDistance.value_or_default();
+            if (ImGui::SliderFloat("Demod Fade Distance", &demodFade, 0.0f, 500.0f,
+                                   demodFade > 0.0f ? "%.0f m" : "Off"))
+                config->FsrdDemodFadeDistance = demodFade;
+
+            ShowHelpMarker("Demodulation fades to 0 from half this distance to this distance,\n"
+                           "so distant fog stays fog. Off uses Demodulation everywhere");
+
             float defaultSharpness = config->FsrdDefaultSharpness.value_or_default();
             if (ImGui::SliderFloat("Default Sharpness", &defaultSharpness, 0.0f, 1.0f, "%.2f"))
                 config->FsrdDefaultSharpness = defaultSharpness;

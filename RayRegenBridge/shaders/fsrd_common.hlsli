@@ -42,7 +42,11 @@ cbuffer Params : register(b0)
 
     uint CounterSlot;         // prepass: SentinelCounter texel counted this frame, the other one is cleared
     float PreExposure;        // the game's color is multiplied by this (DLSS.Pre.Exposure), signals are divided by it
-    float2 Pad3;
+    float MirrorRoughness;    // compose: below this roughness the game's raw specular replaces the denoised one, 0 = off
+    float Demodulation;       // exponent on the albedos the signals are divided by: 1 = full, 0 = none
+
+    float DemodFadeDistance;  // view Z (meters) where Demodulation has faded to 0 (fog), 0 = off
+    float3 Pad4;
 };
 
 #define SENTINEL_PASSTHROUGH 0
@@ -110,12 +114,25 @@ float LinearDepth(float hwDepth)
 bool GetModulation(float3 diffuseAlbedo, float3 specularAlbedo, float hwDepth, out float3 dMod, out float3 sMod,
                    out float albedoRatio)
 {
-    dMod = max(diffuseAlbedo, MinAlbedo);
-    sMod = SplitMode == SPLIT_ALBEDO ? max(specularAlbedo, MinAlbedo) : max(diffuseAlbedo + specularAlbedo, MinAlbedo);
+    dMod = 1.0f;
+    sMod = 1.0f;
     albedoRatio = 0.0f;
 
     if (IsSky(hwDepth))
         return false;
+
+    // Fog and haze come in the color with no albedo of their own: divided by the surface's albedo they turn into
+    // light the denoiser spreads over the surface, and the remodulated result shows the paint instead of the fog.
+    // Partial demodulation (exponent < 1), faded out with distance where fog dominates, keeps them as they are.
+    float exponent = Demodulation;
+
+    if (DemodFadeDistance > 0.0f)
+        exponent *= 1.0f - smoothstep(0.5f * DemodFadeDistance, DemodFadeDistance, LinearDepth(hwDepth));
+
+    dMod = pow(max(diffuseAlbedo, MinAlbedo), exponent);
+    sMod = pow(SplitMode == SPLIT_ALBEDO ? max(specularAlbedo, MinAlbedo)
+                                         : max(diffuseAlbedo + specularAlbedo, MinAlbedo),
+               exponent);
 
     float lumD = dot(diffuseAlbedo, LumaWeights);
     float lumS = dot(specularAlbedo, LumaWeights);
