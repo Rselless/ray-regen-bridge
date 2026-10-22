@@ -117,7 +117,8 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
 
     // Mirrors (puddles, chrome, glass): without the game's specular hit distance the denoiser can't reproject a
     // sharp reflection and averages it away. A single mirror ray is already almost clean, so it's kept as is.
-    if (MirrorRoughness > 0.0f)
+    // Skin is never a mirror: its raw specular is grainy path tracing noise.
+    if (MirrorRoughness > 0.0f && packedNormals.w < 0.5f * MATERIAL_SKIN)
     {
         const float4 raw = SpecularInput.Load(p);
         const float mirror = 1.0f - smoothstep(0.5f * MirrorRoughness, MirrorRoughness, packedNormals.z);
