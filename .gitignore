@@ -483,5 +483,6 @@ dist/
 /external/nvngx_dlss_sdk/
 /external/directx_agility_sdk/
 /OptiScaler/library/d3dx/
+/OptiScaler/include/d3dx/D3DX11*.h
 /OptiScaler/shaders/shader_tools/*.exe
 /OptiScaler/shaders/shader_tools/*.dll
