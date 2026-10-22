@@ -516,6 +516,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="..\RayRegenBridge\feature\FSRDFeatureDx12.h" />
     <ClInclude Include="..\RayRegenBridge\feature\ffx_denoiser_compat.h" />
     <ClInclude Include="..\RayRegenBridge\feature\FsrdProbe.h" />
+    <ClInclude Include="..\RayRegenBridge\feature\FsrdFrameDump.h" />
     <ClInclude Include="..\RayRegenBridge\feature\FsrdUtil.h" />
     <ClInclude Include="upscalers\dlssd\DLSSDFeature_Vk.h" />
     <ClInclude Include="upscalers\dlss\DLSSFeature.h" />
@@ -593,6 +594,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="..\RayRegenBridge\shaders\fsrd_compose_Shader.h" />
     <ClInclude Include="..\RayRegenBridge\shaders\fsrd_particles_Shader.h" />
     <ClInclude Include="..\RayRegenBridge\shaders\fsrd_probe_Shader.h" />
+    <ClInclude Include="..\RayRegenBridge\shaders\fsrd_dump_Shader.h" />
     <ClInclude Include="shaders\format_transfer\FT_Common.h" />
     <ClInclude Include="shaders\format_transfer\FT_Dx12.h" />
     <ClInclude Include="shaders\output_scaling\fsr1\FSR_EASU_Shader.h" />
@@ -784,6 +786,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="upscalers\dlssd\DLSSDFeature_Dx12.cpp" />
     <ClCompile Include="..\RayRegenBridge\feature\FSRDFeatureDx12.cpp" />
     <ClCompile Include="..\RayRegenBridge\feature\FsrdProbe.cpp" />
+    <ClCompile Include="..\RayRegenBridge\feature\FsrdFrameDump.cpp" />
     <ClCompile Include="upscalers\dlssd\DLSSDFeature_Vk.cpp" />
     <ClCompile Include="upscalers\dlss\DLSSFeature.cpp" />
     <ClCompile Include="upscalers\dlss\DLSSFeature_Dx11.cpp" />

@@ -475,3 +475,6 @@ dist/
 /Issues.md
 /Spoofing.md
 /images/
+
+# Frame captures (Diagnostics > Capture frame)
+RRB_Captures/

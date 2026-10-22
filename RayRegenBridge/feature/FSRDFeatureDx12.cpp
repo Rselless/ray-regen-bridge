@@ -185,7 +185,8 @@ FSRDFeatureDx12::~FSRDFeatureDx12()
 
     std::thread(
         [retired = std::move(_retired), prepass = std::move(_prepass), compose = std::move(_compose),
-         particles = std::move(_particlesPass), probe = std::move(_probe)]() mutable
+         particles = std::move(_particlesPass), probe = std::move(_probe),
+         frameDump = std::move(_frameDump)]() mutable
         {
             std::this_thread::sleep_for(std::chrono::seconds(2));
 
@@ -738,6 +739,7 @@ bool FSRDFeatureDx12::InitInternal(ID3D12GraphicsCommandList* InCommandList, NVS
                                                      sizeof(fsrd_particles_cso));
     // Diagnostics only, the denoiser works without it
     _probe = std::make_unique<FsrdProbe>(Device);
+    _frameDump = std::make_unique<FsrdFrameDump>(Device);
 
     if (!_prepass->CanRender() || !_compose->CanRender() || !_particlesPass->CanRender())
     {
@@ -746,6 +748,7 @@ bool FSRDFeatureDx12::InitInternal(ID3D12GraphicsCommandList* InCommandList, NVS
         _compose.reset();
         _particlesPass.reset();
         _probe.reset();
+        _frameDump.reset();
         _denoiserDisabled = true;
     }
 
@@ -1224,7 +1227,73 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
         return nullptr;
 
     RunProbe(InCommandList, in, constants);
+    RunFrameDump(InCommandList, InParameters, in, constants);
     return _composedColor;
+}
+
+void FSRDFeatureDx12::RunFrameDump(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters,
+                                   const FrameInputs& in, const FsrdPass_Dx12::Constants& constants)
+{
+    if (_frameDump == nullptr || (!_frameDump->Pending()))
+        return;
+
+    auto* config = Config::Instance();
+    auto tunable = [](const CustomOptional<float, NoDefault>& value)
+    { return value.has_value() ? std::format("{}", value.value()) : std::string("null"); };
+
+    // Everything the analysis needs to redo the prepass/compose math on the dumped textures
+    const std::string metadata = std::format(
+        "  \"render\": [{}, {}],\n  \"display\": [{}, {}],\n  \"flags\": {},\n"
+        "  \"preExposure\": {},\n  \"splitMode\": {},\n  \"diffuseHitDistance\": {},\n"
+        "  \"skyDepth\": {},\n  \"projZZ\": {},\n  \"projWZ\": {},\n"
+        "  \"maxRadiance\": {},\n  \"stabilityBias\": {},\n  \"radianceClipStdK\": {},\n"
+        "  \"kernelRelaxation\": {},\n  \"mirrorRoughness\": {},\n  \"demodulation\": {},\n"
+        "  \"demodFadeDistance\": {},\n  \"farPassthrough\": {},\n  \"transparencyLayer\": {},\n"
+        "  \"particleLayer\": {},\n  \"signalType\": {},\n  \"sentinelMode\": {},\n"
+        "  \"reflectionReactive\": {}",
+        in.renderWidth, in.renderHeight, DisplayWidth(), DisplayHeight(), constants.Flags, constants.PreExposure,
+        constants.SplitMode, constants.DiffuseHitDistance, constants.SkyDepth, constants.ProjZZ, constants.ProjWZ,
+        config->FsrdMaxRadiance.has_value() ? std::format("{}", config->FsrdMaxRadiance.value())
+                                            : std::format("{}", DefaultMaxRadiance),
+        tunable(config->FsrdStabilityBias), tunable(config->FsrdRadianceClipStdK),
+        tunable(config->FsrdKernelRelaxation), constants.MirrorRoughness, constants.Demodulation,
+        constants.DemodFadeDistance, config->FsrdFarPassthrough.value_or_default(),
+        config->FsrdTransparencyLayer.value_or_default(), config->FsrdParticleLayer.value_or_default(),
+        config->FsrdSignalType.value_or_default(), constants.SentinelMode, constants.ReflectionReactive);
+
+    const auto read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    const auto write = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+
+    // Compose leaves the denoised signals as UAVs (the denoiser's state)
+    Barriers(InCommandList, { { _diffuseOut, write, read }, { _specularOut, write, read } });
+
+    _frameDump->Run(InCommandList, constants,
+                    { { "color", in.color },
+                      { "diffuse_albedo", in.diffuseAlbedo },
+                      { "specular_albedo", in.specularAlbedo },
+                      { "normals", in.normals },
+                      { "roughness", in.roughness },
+                      { "depth", in.depth },
+                      { "motion_vectors", in.motionVectors },
+                      { "specular_hit_distance", in.specularHitDistance },
+                      { "sss_guide", in.sssGuide },
+                      { "particles", in.particles },
+                      { "before_transparency", in.beforeTransparency },
+                      { "emissive", in.emissive },
+                      { "diffuse_hit", in.diffuseHit },
+                      { "game_reactive", GetResource(InParameters, NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_Mask) },
+                      { "diffuse_in", _diffuseIn },
+                      { "specular_in", _specularIn },
+                      { "diffuse_out", _diffuseOut },
+                      { "specular_out", _specularOut },
+                      { "packed_normals", _packedNormals },
+                      { "linear_depth", _linearDepth },
+                      { "ffx_motion_vectors", _motionVectors },
+                      { "composed", _composedColor },
+                      { "reactive", _reactiveMask } },
+                    metadata);
+
+    Barriers(InCommandList, { { _diffuseOut, read, write }, { _specularOut, read, write } });
 }
 
 ID3D12Resource* FSRDFeatureDx12::GetParticleLayer(NVSDK_NGX_Parameter* InParameters, ID3D12Resource* color)

@@ -2962,6 +2962,38 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                                    "Starts 2 s after pressing: close the menu, a timer shows on screen.");
                 }
 
+                if (auto dump = fsrdFeature != nullptr ? fsrdFeature->FrameDump() : nullptr; dump != nullptr)
+                {
+                    static char dumpLabel[32] = "scene";
+                    ImGui::PushItemWidth(120.0f * menuResScale);
+                    ImGui::InputText("##FrameDumpLabel", dumpLabel, sizeof(dumpLabel));
+                    ImGui::PopItemWidth();
+                    ImGui::SameLine();
+
+                    if (dump->Pending())
+                    {
+                        ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)),
+                                           "Frame in %.1f s, close the menu", dump->Countdown());
+                    }
+                    else if (ImGui::Button("Capture frame"))
+                    {
+                        // The label is read by the render thread later, so it gets its own copy
+                        static std::string requestedLabel;
+                        requestedLabel = dumpLabel;
+                        std::replace_if(requestedLabel.begin(), requestedLabel.end(),
+                                        [](char c) { return !std::isalnum((unsigned char) c); }, '_');
+                        dump->Request(requestedLabel.c_str());
+                    }
+
+                    ShowHelpMarker("Saves one whole frame of every stage (game inputs, denoiser\n"
+                                   "signals before and after, composed image) to RRB_Captures\n"
+                                   "next to OptiScaler.log, for offline analysis (~250 MB).\n"
+                                   "Taken 2 s after pressing: close the menu first.");
+
+                    if (const auto folder = dump->LastFolder(); !folder.empty())
+                        ImGui::TextWrapped("Last: %s", folder.c_str());
+                }
+
                 bool diagnostics = config->FsrdDiagnostics.value_or_default();
                 if (ImGui::Checkbox("Diagnostics log", &diagnostics))
                     config->FsrdDiagnostics = diagnostics;

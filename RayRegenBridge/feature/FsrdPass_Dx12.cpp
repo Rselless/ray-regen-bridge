@@ -20,7 +20,7 @@ bool FsrdPass_Dx12::Dispatch(ID3D12GraphicsCommandList* InCmdList, const std::ve
     ScopedGpuTime_Dx12 scopedGpuTime(GpuTime.get(), InCmdList);
 
     _counter++;
-    _counter = _counter % FSRDPASS_NUM_OF_HEAPS;
+    _counter = _counter % (UINT) _frameHeaps.size();
     FrameDescriptorHeap& currentHeap = _frameHeaps[_counter];
 
     for (UINT i = 0; i < _srvSlots; i++)
@@ -63,8 +63,9 @@ bool FsrdPass_Dx12::Dispatch(ID3D12GraphicsCommandList* InCmdList, const std::ve
 }
 
 FsrdPass_Dx12::FsrdPass_Dx12(std::string InName, ID3D12Device* InDevice, UINT InSrvCount, UINT InUavCount,
-                             const void* InBytecode, size_t InBytecodeSize)
-    : Shader_Dx12(InName, InDevice), _srvSlots(InSrvCount), _uavSlots(InUavCount)
+                             const void* InBytecode, size_t InBytecodeSize, UINT InHeapCount)
+    : Shader_Dx12(InName, InDevice), _frameHeaps(InHeapCount), _constantBuffers(InHeapCount, nullptr),
+      _srvSlots(InSrvCount), _uavSlots(InUavCount)
 {
     if (InDevice == nullptr)
     {
@@ -83,7 +84,7 @@ FsrdPass_Dx12::FsrdPass_Dx12(std::string InName, ID3D12Device* InDevice, UINT In
     D3D12_RESOURCE_DESC desc = CD3DX12_RESOURCE_DESC::Buffer(sizeof(Constants));
     auto heapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
 
-    for (int i = 0; i < FSRDPASS_NUM_OF_HEAPS; i++)
+    for (size_t i = 0; i < _constantBuffers.size(); i++)
     {
         auto result = InDevice->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &desc,
                                                         D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
@@ -102,7 +103,7 @@ FsrdPass_Dx12::FsrdPass_Dx12(std::string InName, ID3D12Device* InDevice, UINT In
         return;
     }
 
-    _init = InitHeaps(InDevice, _frameHeaps, FSRDPASS_NUM_OF_HEAPS);
+    _init = InitHeaps(InDevice, _frameHeaps.data(), _frameHeaps.size());
 }
 
 FsrdPass_Dx12::~FsrdPass_Dx12()
@@ -110,7 +111,7 @@ FsrdPass_Dx12::~FsrdPass_Dx12()
     if (State::Instance().isShuttingDown)
         return;
 
-    for (int i = 0; i < FSRDPASS_NUM_OF_HEAPS; i++)
+    for (size_t i = 0; i < _frameHeaps.size(); i++)
     {
         _frameHeaps[i].ReleaseHeaps();
         SAFE_RELEASE(_constantBuffers[i]);

@@ -17,6 +17,7 @@
 #include <upscalers/ffx/FFXFeature_Dx12.h>
 #include "FsrdPass_Dx12.h"
 #include "FsrdProbe.h"
+#include "FsrdFrameDump.h"
 #include <array>
 #include <memory>
 #include <vector>
@@ -79,6 +80,7 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     std::unique_ptr<FsrdPass_Dx12> _compose;
     std::unique_ptr<FsrdPass_Dx12> _particlesPass; // particle layer over the game's color (bypass)
     std::unique_ptr<FsrdProbe> _probe; // diagnostics, null when the denoiser is off
+    std::unique_ptr<FsrdFrameDump> _frameDump; // diagnostics: whole frame of every stage to files
 
     // Replaced resources and denoiser contexts, released RetireFrames evaluations later (the GPU can still be
     // running work that uses them)
@@ -159,6 +161,8 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
                      const FrameInputs& in);
     bool RunCompose(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters,
                     const FrameInputs& in, const FsrdPass_Dx12::Constants& constants);
+    void RunFrameDump(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters,
+                      const FrameInputs& in, const FsrdPass_Dx12::Constants& constants);
     void RunProbe(ID3D12GraphicsCommandList* InCommandList, const FrameInputs& in,
                   const FsrdPass_Dx12::Constants& constants);
 
@@ -177,6 +181,7 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
 
     // For the menu: input probe and timed captures, null when the denoiser is off
     FsrdProbe* Probe() const { return _probe.get(); }
+    FsrdFrameDump* FrameDump() const { return _frameDump.get(); }
 
     FSRDFeatureDx12(unsigned int InHandleId, NVSDK_NGX_Parameter* InParameters);
     ~FSRDFeatureDx12();

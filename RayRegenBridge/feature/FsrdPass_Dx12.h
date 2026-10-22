@@ -52,8 +52,10 @@ class FsrdPass_Dx12 : public Shader_Dx12
     };
 
   private:
-    FrameDescriptorHeap _frameHeaps[FSRDPASS_NUM_OF_HEAPS];
-    ID3D12Resource* _constantBuffers[FSRDPASS_NUM_OF_HEAPS] {};
+    // One heap and constant buffer per dispatch that can be in flight: FSRDPASS_NUM_OF_HEAPS for once per frame
+    // passes, more for passes dispatched several times in one command list (frame dump)
+    std::vector<FrameDescriptorHeap> _frameHeaps;
+    std::vector<ID3D12Resource*> _constantBuffers;
 
     UINT _srvSlots = 0;
     UINT _uavSlots = 0;
@@ -70,7 +72,7 @@ class FsrdPass_Dx12 : public Shader_Dx12
     bool CanRender() const { return _init; }
 
     FsrdPass_Dx12(std::string InName, ID3D12Device* InDevice, UINT InSrvCount, UINT InUavCount,
-                  const void* InBytecode, size_t InBytecodeSize);
+                  const void* InBytecode, size_t InBytecodeSize, UINT InHeapCount = FSRDPASS_NUM_OF_HEAPS);
 
     ~FsrdPass_Dx12();
 };
