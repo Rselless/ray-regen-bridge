@@ -440,6 +440,7 @@ bool Config::Reload(std::filesystem::path iniPath)
                 FsrdDefaultSharpness.set_from_config(setting);
 
             FsrdDiagnostics.set_from_config(readBool("FSRD", "Diagnostics"));
+            FsrdCaptureFolder.set_from_config(readString("FSRD", "CaptureFolder"));
 
             if (auto setting = readInt("FSRD", "SignalType"); setting.has_value() && setting >= 0 && setting <= 1)
                 FsrdSignalType.set_from_config(setting);
@@ -1289,6 +1290,8 @@ bool Config::SaveIni()
         ini.SetValue("FSRD", "DefaultSharpness",
                      GetFloatValue(Instance()->FsrdDefaultSharpness.value_for_config()).c_str());
         ini.SetValue("FSRD", "Diagnostics", GetBoolValue(Instance()->FsrdDiagnostics.value_for_config()).c_str());
+        ini.SetValue("FSRD", "CaptureFolder",
+                     Instance()->FsrdCaptureFolder.has_value() ? Instance()->FsrdCaptureFolder.value().c_str() : "auto");
         ini.SetValue("FSRD", "SignalType", GetIntValue(Instance()->FsrdSignalType.value_for_config()).c_str());
         ini.SetValue("FSRD", "StabilityBias",
                      GetFloatValue(Instance()->FsrdStabilityBias.value_for_config()).c_str());

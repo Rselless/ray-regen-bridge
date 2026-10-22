@@ -320,6 +320,8 @@ class Config
     CustomOptional<float> FsrdDefaultSharpness { 0.25f };
     // Periodic probe log of the inputs (hit distance, depth, normals, albedos) outside captures
     CustomOptional<bool> FsrdDiagnostics { false };
+    // Where captures, metrics and the remote command/status files go (default: RRB_Captures next to the DLL)
+    CustomOptional<std::string, NoDefault> FsrdCaptureFolder;
     // Denoiser signal types: 0 = indirect diffuse/specular (with hit distance), 1 = direct (no hit distance)
     CustomOptional<int> FsrdSignalType { 0 };
     // Diagnostic, menu only: create the denoiser with FFX_DENOISER_ENABLE_VALIDATION, messages go to the log

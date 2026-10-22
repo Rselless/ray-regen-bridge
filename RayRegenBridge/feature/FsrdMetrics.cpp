@@ -328,7 +328,7 @@ void FsrdMetrics::Summarize()
         seconds, frames, medianGain, bright, dark, std::exp2(worstGain) - 1.0, worstX, worstY, medianShift, shiftsHigh,
         clampShare, medianNoise, medianFlicker, medianFlickerIn, skinShare));
 
-    const auto csv = Util::DllPath().parent_path() / "RRB_Captures" / "metrics.csv";
+    const auto csv = FsrdRemote::Folder() / "metrics.csv";
     std::ofstream out(csv, std::ios::app);
 
     if (!_csvHeader)

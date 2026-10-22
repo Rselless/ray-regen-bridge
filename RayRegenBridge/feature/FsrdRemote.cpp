@@ -23,8 +23,6 @@ using Clock = std::chrono::steady_clock;
 constexpr auto PollInterval = std::chrono::milliseconds(500);
 constexpr float DefaultMessageSeconds = 8.0f;
 
-std::filesystem::path Folder() { return Util::DllPath().parent_path() / "RRB_Captures"; }
-
 std::deque<std::string> queue;
 Clock::time_point nextPoll {};
 Clock::time_point waitUntil {};
@@ -154,14 +152,14 @@ void SetMessage(const std::string& text, float seconds)
 
 void Poll()
 {
-    const auto file = Folder() / "command.txt";
+    const auto file = FsrdRemote::Folder() / "command.txt";
     std::error_code ec;
 
     if (!std::filesystem::exists(file, ec))
         return;
 
     // Renamed before reading, so a file being written again isn't half read twice
-    const auto taken = Folder() / "command.running";
+    const auto taken = FsrdRemote::Folder() / "command.running";
     std::filesystem::rename(file, taken, ec);
 
     if (ec)
@@ -305,6 +303,16 @@ bool Execute(const std::string& line, FsrdFrameDump* dump, FsrdMetrics* metrics)
 
 namespace FsrdRemote
 {
+std::filesystem::path Folder()
+{
+    auto& folder = Config::Instance()->FsrdCaptureFolder;
+
+    if (folder.has_value() && !folder.value().empty() && folder.value() != "auto")
+        return std::filesystem::path(folder.value());
+
+    return Util::DllPath().parent_path() / "RRB_Captures";
+}
+
 void Tick(FsrdFrameDump* dump, FsrdMetrics* metrics)
 {
     const auto now = Clock::now();

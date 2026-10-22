@@ -397,11 +397,29 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('folder')
     parser.add_argument('--tile', type=int, default=32)
+    parser.add_argument('--prune', action='store_true',
+                        help='delete the .dds files once analyzed (keeps capture.json and analysis/)')
     args = parser.parse_args()
     folder = args.folder
 
+    code = run(folder, args.tile)
+
+    if args.prune and code == 0:
+        freed = 0
+        for root, _, files in os.walk(folder):
+            for name in files:
+                if name.endswith('.dds'):
+                    path = os.path.join(root, name)
+                    freed += os.path.getsize(path)
+                    os.remove(path)
+        print(f'\nPruned {freed / 2 ** 20:.0f} MB of .dds')
+
+    return code
+
+
+def run(folder, tile):
     if os.path.exists(os.path.join(folder, 'capture.json')):
-        analyze_frame(folder, args.tile)
+        analyze_frame(folder, tile)
         return 0
 
     frames = sorted(os.path.join(folder, d) for d in os.listdir(folder)
@@ -412,7 +430,7 @@ def main():
 
     first = json.load(open(os.path.join(frames[0], 'capture.json'), encoding='utf-8'))
     if first.get('reduced'):
-        analyze_burst(folder, frames, args.tile)
+        analyze_burst(folder, frames, tile)
         return 0
 
     # Sequence: full analysis of every frame, then one table over time
@@ -422,7 +440,7 @@ def main():
             '|---|---|---|---|---|---|---|---|']
     for path in frames:
         meta = json.load(open(os.path.join(path, 'capture.json'), encoding='utf-8'))
-        r = analyze_frame(path, args.tile, quiet=True)
+        r = analyze_frame(path, tile, quiet=True)
         rows.append(f"| {meta['frameIndex']} | {meta['timeMs']:.0f} | {pct(r['gain'])} | {r['brighter']:.0%} | "
                     f"{r['darker']:.0%} | {r['shift']:.3f} | {r['clamped']:.2%} | {r['noise']:.2f} |")
     os.makedirs(os.path.join(folder, 'analysis'), exist_ok=True)

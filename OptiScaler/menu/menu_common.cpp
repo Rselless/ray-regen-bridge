@@ -3057,7 +3057,7 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                         dump->Start(request);
                     }
 
-                    ShowHelpMarker("Saves whole frames to RRB_Captures next to OptiScaler.log\n"
+                    ShowHelpMarker("Saves whole frames to the capture folder ([FSRD] CaptureFolder)\n"
                                    "for offline analysis (tools/analyze_capture.py).\n"
                                    "One frame: every stage (game inputs, denoiser signals before\n"
                                    "and after, composed image), ~250 MB.\n"
@@ -3075,7 +3075,8 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                     FsrdMetrics::SetEnabled(liveMetrics);
 
                 ShowHelpMarker("Once per second writes a summary of the whole image to\n"
-                               "RRB_Captures\\status.txt, metrics.csv and the log: brightness and\n"
+                               "status.txt and metrics.csv in the capture folder and the log:\n"
+                               "brightness and "
                                "color change against the game's image, clamped signals,\n"
                                "noise left and flicker. Costs well under 0.1 ms.");
 

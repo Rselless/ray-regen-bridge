@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "FsrdFrameDump.h"
+#include "FsrdRemote.h"
 #include "FsrdUtil.h"
 
 #include <Util.h>
@@ -86,7 +87,7 @@ bool FsrdFrameDump::FrameDue()
         std::tm local {};
         localtime_s(&local, &now);
         std::strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", &local);
-        _folder = (Util::DllPath().parent_path() / "RRB_Captures" / (std::string(stamp) + "_" + _active.label))
+        _folder = (FsrdRemote::Folder() / (std::string(stamp) + "_" + _active.label))
                       .string();
     }
 
