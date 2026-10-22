@@ -943,7 +943,10 @@ FsrdPass_Dx12::Constants FSRDFeatureDx12::BuildConstants(const FrameInputs& in, 
                       (in.normalsUnorm ? FlagNormalsUnorm : 0) | (in.sssGuide != nullptr ? FlagSssGuide : 0) |
                       (in.particles != nullptr && in.layerOpacity != nullptr ? FlagLayerOpacity : 0) |
                       (in.diffuseHit != nullptr ? FlagDiffuseHit : 0) | (in.diffuseHitInW ? FlagDiffuseHitInW : 0);
-    constants.PreExposure = in.preExposure;
+    // The prepass divides the game's color by PreExposure and compose multiplies the result back, so SignalScale
+    // only changes the range the denoiser works in (it may filter in a compressed space, which loses energy of
+    // sparse bright samples such as noisy fog)
+    constants.PreExposure = in.preExposure / std::clamp(config->FsrdSignalScale.value_or_default(), 0.001f, 100.0f);
     constants.RenderWidth = in.renderWidth;
     constants.RenderHeight = in.renderHeight;
     constants.SkyDepth = SkyDepth;
@@ -1269,7 +1272,7 @@ void FSRDFeatureDx12::RunFrameDump(ID3D12GraphicsCommandList* InCommandList, NVS
         "  \"kernelRelaxation\": {},\n  \"mirrorRoughness\": {},\n  \"demodulation\": {},\n"
         "  \"demodFadeDistance\": {},\n  \"farPassthrough\": {},\n  \"transparencyLayer\": {},\n"
         "  \"particleLayer\": {},\n  \"signalType\": {},\n  \"sentinelMode\": {},\n"
-        "  \"reflectionReactive\": {}",
+        "  \"reflectionReactive\": {},\n  \"signalScale\": {}",
         in.renderWidth, in.renderHeight, DisplayWidth(), DisplayHeight(), constants.Flags, constants.PreExposure,
         constants.SplitMode, constants.DiffuseHitDistance, constants.SkyDepth, constants.ProjZZ, constants.ProjWZ,
         config->FsrdMaxRadiance.has_value() ? std::format("{}", config->FsrdMaxRadiance.value())
@@ -1278,7 +1281,8 @@ void FSRDFeatureDx12::RunFrameDump(ID3D12GraphicsCommandList* InCommandList, NVS
         tunable(config->FsrdKernelRelaxation), constants.MirrorRoughness, constants.Demodulation,
         constants.DemodFadeDistance, config->FsrdFarPassthrough.value_or_default(),
         config->FsrdTransparencyLayer.value_or_default(), config->FsrdParticleLayer.value_or_default(),
-        config->FsrdSignalType.value_or_default(), constants.SentinelMode, constants.ReflectionReactive);
+        config->FsrdSignalType.value_or_default(), constants.SentinelMode, constants.ReflectionReactive,
+        config->FsrdSignalScale.value_or_default());
 
     const auto read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     const auto write = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;

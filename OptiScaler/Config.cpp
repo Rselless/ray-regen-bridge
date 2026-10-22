@@ -435,6 +435,9 @@ bool Config::Reload(std::filesystem::path iniPath)
             if (auto setting = readFloat("FSRD", "DemodFadeDistance"); setting.has_value() && setting.value() >= 0.0f)
                 FsrdDemodFadeDistance.set_from_config(setting);
 
+            if (auto setting = readFloat("FSRD", "SignalScale"); setting.has_value() && setting.value() > 0.0f)
+                FsrdSignalScale.set_from_config(setting);
+
             if (auto setting = readFloat("FSRD", "DefaultSharpness");
                 setting.has_value() && setting.value() >= 0.0f && setting.value() <= 1.0f)
                 FsrdDefaultSharpness.set_from_config(setting);
@@ -1287,6 +1290,7 @@ bool Config::SaveIni()
         ini.SetValue("FSRD", "Demodulation", GetFloatValue(Instance()->FsrdDemodulation.value_for_config()).c_str());
         ini.SetValue("FSRD", "DemodFadeDistance",
                      GetFloatValue(Instance()->FsrdDemodFadeDistance.value_for_config()).c_str());
+        ini.SetValue("FSRD", "SignalScale", GetFloatValue(Instance()->FsrdSignalScale.value_for_config()).c_str());
         ini.SetValue("FSRD", "DefaultSharpness",
                      GetFloatValue(Instance()->FsrdDefaultSharpness.value_for_config()).c_str());
         ini.SetValue("FSRD", "Diagnostics", GetBoolValue(Instance()->FsrdDiagnostics.value_for_config()).c_str());

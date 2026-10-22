@@ -318,6 +318,8 @@ class Config
     CustomOptional<float> FsrdDemodFadeDistance { 0.0f };
     // RCAS sharpness applied when neither the game nor the user sets one (the denoiser softens fine detail)
     CustomOptional<float> FsrdDefaultSharpness { 0.25f };
+    // Multiplier on the signals the denoiser gets (compose divides it back): tests its range dependence
+    CustomOptional<float> FsrdSignalScale { 1.0f };
     // Periodic probe log of the inputs (hit distance, depth, normals, albedos) outside captures
     CustomOptional<bool> FsrdDiagnostics { false };
     // Where captures, metrics and the remote command/status files go (default: RRB_Captures next to the DLL)

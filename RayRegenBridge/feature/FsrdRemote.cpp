@@ -56,6 +56,7 @@ std::map<std::string, OptionPtr> Options()
         { "Demodulation", &c->FsrdDemodulation },
         { "DemodFadeDistance", &c->FsrdDemodFadeDistance },
         { "DefaultSharpness", &c->FsrdDefaultSharpness },
+        { "SignalScale", &c->FsrdSignalScale },
         { "BypassDenoiser", &c->FsrdBypassDenoiser },
         { "StabilityBias", &c->FsrdStabilityBias },
         { "RadianceClipStdK", &c->FsrdRadianceClipStdK },
