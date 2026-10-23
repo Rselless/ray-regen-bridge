@@ -1,5 +1,5 @@
 #pragma once
-// Small D3D12 helpers shared by FSRDFeatureDx12 and FsrdProbe (include after pch.h)
+// Small D3D12 helpers shared by FSRDFeatureDx12 and its diagnostics (include after pch.h)
 #include <d3d12.h>
 #include <d3dx/d3dx12.h>
 #include <initializer_list>

@@ -1,5 +1,5 @@
 #pragma once
-// One compute pass of FSRDFeatureDx12 (fsrd_prepass / fsrd_compose / fsrd_particles / fsrd_probe). Same pattern as Bias_Dx12, but with a
+// One compute pass of FSRDFeatureDx12 (fsrd_prepass / fsrd_compose / fsrd_exposure_* / ...). Same pattern as Bias_Dx12, but with a
 // variable number of SRVs/UAVs and one constant buffer per descriptor heap, since constants are written at record
 // time and the GPU can still be reading the previous frame's.
 #include <d3d12.h>
@@ -37,19 +37,15 @@ class FsrdPass_Dx12 : public Shader_Dx12
         float ReflectionReactive;
         float GameMaskBias;
         float SpecHitScale;
-        float RoughnessOverride;
+        float PreExposure; // DLSS.Pre.Exposure the game's color is multiplied by, 1 when not sent
 
         float CameraForward[3];
         uint32_t SentinelMode;
 
-        uint32_t CounterSlot;
-        float PreExposure; // DLSS.Pre.Exposure the game's color is multiplied by, 1 when not sent
-        float MirrorRoughness;
-        float Demodulation;
-
-        float DemodFadeDistance;
         float MaxRadiance;
-        float Pad4[2];
+        uint32_t ExposureTilesX;
+        uint32_t ExposureTilesY;
+        float Pad4;
     };
 
   private:

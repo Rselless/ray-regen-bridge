@@ -310,29 +310,18 @@ class Config
     CustomOptional<int> FsrdTransparencyLayer { 1 };
     // Texels farther than this (view Z, meters) skip the denoiser and keep the game's color (distant fog), 0 = off
     CustomOptional<float> FsrdFarPassthrough { 0.0f };
-    // Below this roughness the game's raw specular replaces the denoised one (mirrors, puddles), 0 = off
-    CustomOptional<float> FsrdMirrorPassthrough { 0.0f };
-    // Exponent on the albedo the color is divided by before denoising: 1 = full, 0 = none (keeps fog and haze)
-    CustomOptional<float> FsrdDemodulation { 1.0f };
-    // Distance (view Z, meters) where demodulation has faded to 0 (distant fog stays fog), 0 = off
-    CustomOptional<float> FsrdDemodFadeDistance { 0.0f };
+    // Track the game's auto exposure and keep it out of the denoiser's history (Cyberpunk doesn't report it)
+    CustomOptional<bool> FsrdExposureCompensation { true };
     // RCAS sharpness applied when neither the game nor the user sets one (the denoiser softens fine detail)
     CustomOptional<float> FsrdDefaultSharpness { 0.25f };
-    // Multiplier on the signals the denoiser gets (compose divides it back): tests its range dependence
-    CustomOptional<float> FsrdSignalScale { 1.0f };
-    // Periodic probe log of the inputs (hit distance, depth, normals, albedos) outside captures
-    CustomOptional<bool> FsrdDiagnostics { false };
     // Where captures, metrics and the remote command/status files go (default: RRB_Captures next to the DLL)
     CustomOptional<std::string, NoDefault> FsrdCaptureFolder;
     // Denoiser signal types: 0 = indirect diffuse/specular (with hit distance), 1 = direct (no hit distance)
     CustomOptional<int> FsrdSignalType { 0 };
     // Diagnostic, menu only: create the denoiser with FFX_DENOISER_ENABLE_VALIDATION, messages go to the log
     CustomOptional<bool> FsrdValidation { false };
-    // Diagnostic, menu only: replace the game's roughness with a constant
-    CustomOptional<bool> FsrdRoughnessOverrideEnabled { false };
     // Diagnostic, menu only: skip the denoiser and upscale the game's color, for A/B in the same frame
     CustomOptional<bool> FsrdBypassDenoiser { false };
-    CustomOptional<float> FsrdRoughnessOverride { 0.2f };
     // Denoiser tuning, unset means the denoiser's own default (filled in as a volatile value once it's queried)
     CustomOptional<float, NoDefault> FsrdStabilityBias;
     CustomOptional<float, NoDefault> FsrdRadianceClipStdK;

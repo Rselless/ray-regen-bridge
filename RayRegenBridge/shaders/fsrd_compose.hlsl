@@ -24,7 +24,7 @@ Texture2D<float> LayerOpacity : register(t10); // DLSS.TransparencyLayerOpacity,
                                                // FLAG_LAYER_OPACITY
 Texture2D<float4> Emissive : register(t11);    // GBuffer.Emissive, the prepass kept it out of the signals
 Texture2D<float> GhostMask : register(t12);    // DLSS.Input.Reduce.Ghost.Mask, goes into the reactive mask
-Texture2D<float4> SpecularInput : register(t13); // prepass specular signal (undenoised), used with MirrorRoughness
+Texture2D<float> Exposure : register(t13);       // tracked scene exposure (FLAG_EXPOSURE)
 
 RWTexture2D<float4> Output : register(u0);
 RWTexture2D<float> Reactive : register(u1);
@@ -82,6 +82,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
     // Null textures read 0, so games that send neither mask are unaffected
     float gameReactive = max(saturate(GameReactive.Load(p) * GameMaskBias), saturate(GhostMask.Load(p)));
     const float3 emissive = max(Emissive.Load(p).rgb, 0.0f);
+    const float scale = PreExposure * SceneExposure(Exposure); // what the prepass divided the signals by
 
     const float3 diffuseAlbedo = DiffuseAlbedo.Load(p).rgb;
     const float3 specularAlbedo = SpecularAlbedo.Load(p).rgb;
@@ -96,7 +97,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
         const bool diffuse = SentinelMode == SENTINEL_DIFFUSE && IsFinite3(denoised) && IsFinite3(color.rgb);
 
         const float3 sentinelColor =
-            diffuse ? AddTransparency(max(denoised, 0.0f) * PreExposure + emissive, color.rgb, p) : color.rgb;
+            diffuse ? AddTransparency(max(denoised, 0.0f) * scale + emissive, color.rgb, p) : color.rgb;
         Output[DTid.xy] = float4(OverParticles(sentinelColor, p, gameReactive), color.a);
         Reactive[DTid.xy] = gameReactive;
         return;
@@ -113,20 +114,9 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
     }
 
     // Back to the game's pre-exposed units
-    float3 specular = max(SpecularDenoised.Load(p).rgb * sMod, 0.0f) * PreExposure;
+    float3 specular = max(SpecularDenoised.Load(p).rgb * sMod, 0.0f) * scale;
 
-    // Mirrors (puddles, chrome, glass): without the game's specular hit distance the denoiser can't reproject a
-    // sharp reflection and averages it away. A single mirror ray is already almost clean, so it's kept as is.
-    // Skin is never a mirror: its raw specular is grainy path tracing noise.
-    if (MirrorRoughness > 0.0f && packedNormals.w < 0.5f * MATERIAL_SKIN)
-    {
-        const float4 raw = SpecularInput.Load(p);
-        const float mirror = 1.0f - smoothstep(0.5f * MirrorRoughness, MirrorRoughness, packedNormals.z);
-
-        if (mirror > 0.0f && raw.w >= 0.0f && IsFinite3(raw.rgb))
-            specular = lerp(specular, max(raw.rgb * sMod, 0.0f) * PreExposure, mirror);
-    }
-    float3 composed = max(DiffuseDenoised.Load(p).rgb * dMod, 0.0f) * PreExposure + specular;
+    float3 composed = max(DiffuseDenoised.Load(p).rgb * dMod, 0.0f) * scale + specular;
 
     if (!IsFinite3(composed))
     {

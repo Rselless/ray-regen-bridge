@@ -1611,21 +1611,6 @@ void MenuCommon::UpdateVersionAndStartupNotifications(RenderMenuContext& ctx)
     }
 }
 
-// FSRD diagnostic capture currently shown on screen, if any
-static FsrdProbe* ProbeCaptureFeature()
-{
-    auto fsrd = dynamic_cast<FSRDFeatureDx12*>(State::Instance().currentFeature);
-    auto probe = fsrd != nullptr ? fsrd->Probe() : nullptr;
-
-    if (probe == nullptr)
-        return nullptr;
-
-    if (probe->CapturePending() || probe->CaptureRemaining() > 0.0f || probe->CaptureJustDone())
-        return probe;
-
-    return nullptr;
-}
-
 // FSRD frame dump running, if any
 static FsrdFrameDump* FrameDumpFeature()
 {
@@ -1634,13 +1619,10 @@ static FsrdFrameDump* FrameDumpFeature()
     return dump != nullptr && dump->Busy() ? dump : nullptr;
 }
 
-static bool ProbeCaptureOverlayNeeded()
-{
-    return ProbeCaptureFeature() != nullptr || FrameDumpFeature() != nullptr || !FsrdRemote::Message().empty();
-}
+static bool RemoteOverlayNeeded() { return FrameDumpFeature() != nullptr || !FsrdRemote::Message().empty(); }
 
 // Messages from FsrdRemote (tests driven from outside the game) and frame dump progress, top of the screen
-static void RenderRemoteOverlay(float scale, ImGuiIO& io, ImGuiWindowFlags flags)
+static void DrawRemoteOverlay(float scale, ImGuiIO& io, ImGuiWindowFlags flags)
 {
     const auto message = FsrdRemote::Message();
     auto dump = FrameDumpFeature();
@@ -1648,7 +1630,7 @@ static void RenderRemoteOverlay(float scale, ImGuiIO& io, ImGuiWindowFlags flags
     if (message.empty() && dump == nullptr)
         return;
 
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, 70.0f * scale), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, 12.0f * scale), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
     ImGui::SetNextWindowBgAlpha(0.8f);
 
     if (ImGui::Begin("##FsrdRemoteOverlay", nullptr, flags))
@@ -1673,63 +1655,15 @@ static void RenderRemoteOverlay(float scale, ImGuiIO& io, ImGuiWindowFlags flags
     ImGui::End();
 }
 
-void MenuCommon::RenderProbeCaptureOverlay(RenderMenuContext& ctx)
+void MenuCommon::RenderRemoteOverlay(RenderMenuContext& ctx)
 {
     if (!ctx.newFrame)
         return;
 
-    {
-        const ImGuiWindowFlags remoteFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
-                                             ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoFocusOnAppearing |
-                                             ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoSavedSettings;
-        RenderRemoteOverlay(std::max(ctx.menuResScale, 1.0f), ctx.io, remoteFlags);
-    }
-
-    auto fsrd = ProbeCaptureFeature();
-
-    if (fsrd == nullptr)
-        return;
-
-    const float scale = std::max(ctx.menuResScale, 1.0f);
-
-    ImGui::SetNextWindowPos(ImVec2(ctx.io.DisplaySize.x * 0.5f, 12.0f * scale), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
-    ImGui::SetNextWindowBgAlpha(0.75f);
-
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                                    ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoFocusOnAppearing |
                                    ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoSavedSettings;
-
-    if (ImGui::Begin("##FsrdProbeCaptureOverlay", nullptr, flags))
-    {
-        ImGui::SetWindowFontScale(1.5f);
-
-        if (fsrd->CapturePending() && fsrd->CaptureCountdown() > 0.0f)
-        {
-            ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)), "RRB capture '%s' starts in %.1f s",
-                               fsrd->CaptureLabel(), fsrd->CaptureCountdown());
-        }
-        else if (fsrd->CapturePending())
-        {
-            // Start time passed but no FSRD frame picked it up: the denoiser isn't running
-            ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.5f, 0.f, 1.f)),
-                               "RRB capture '%s' waiting: no denoiser frames (Ray Reconstruction off?)",
-                               fsrd->CaptureLabel());
-        }
-        else if (const float remaining = fsrd->CaptureRemaining(); remaining > 0.0f)
-        {
-            ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.25f, 0.25f, 1.f)), "REC");
-            ImGui::SameLine();
-            ImGui::TextColored(toneMapColor(ImVec4(0.3f, 0.8f, 1.f, 1.f)), "RRB capture #%d '%s': %.1f s",
-                               fsrd->CaptureCount(), fsrd->CaptureLabel(), remaining);
-        }
-        else
-        {
-            ImGui::TextColored(toneMapColor(ImVec4(0.f, 1.f, 0.25f, 1.f)), "RRB capture #%d '%s' done",
-                               fsrd->CaptureCount(), fsrd->CaptureLabel());
-        }
-    }
-
-    ImGui::End();
+    DrawRemoteOverlay(std::max(ctx.menuResScale, 1.0f), ctx.io, flags);
 }
 
 void MenuCommon::BeginMenuFrameIfNeeded(RenderMenuContext& ctx)
@@ -1743,7 +1677,7 @@ void MenuCommon::BeginMenuFrameIfNeeded(RenderMenuContext& ctx)
     // New frame check
     if ((!config->DisableSplash.value_or_default() && now > splashStart && now < splashLimit) ||
         config->ShowFps.value_or_default() || _isVisible || ImGui::notifications.size() > 0 ||
-        ProbeCaptureOverlayNeeded())
+        RemoteOverlayNeeded())
     {
         if (!_isUWP)
         {
@@ -2805,9 +2739,11 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
         {
             ImGui::SeparatorText("Ray Regen Bridge");
 
-            if (auto fsrd = dynamic_cast<FSRDFeatureDx12*>(currentFeature); fsrd != nullptr)
+            auto fsrdFeature = dynamic_cast<FSRDFeatureDx12*>(currentFeature);
+
+            if (fsrdFeature != nullptr)
             {
-                if (fsrd->DenoiserActive())
+                if (fsrdFeature->DenoiserActive())
                     ImGui::TextColored(toneMapColor(ImVec4(0.f, 1.f, 0.25f, 1.f)), "Denoiser active");
                 else
                     ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)),
@@ -2816,62 +2752,26 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
 
             ImGui::PushItemWidth(220.0f * menuResScale);
 
-            const char* splitModes[] = { "Albedo ratio", "All specular", "Roughness weighted" };
-            int splitMode = std::clamp(config->FsrdSplitMode.value_or_default(), 0, 2);
+            // Filled with the bridge's default once the denoiser's context exists
+            if (config->FsrdStabilityBias.has_value())
+            {
+                float stability = config->FsrdStabilityBias.value();
+                if (ImGui::SliderFloat("Stability Bias", &stability, 0.0f, 1.0f, "%.2f"))
+                    config->FsrdStabilityBias = stability;
 
-            if (ImGui::Combo("Signal Split", &splitMode, splitModes, IM_ARRAYSIZE(splitModes)))
-                config->FsrdSplitMode = splitMode;
+                ShowHelpMarker("How much the denoiser trusts its history (default 0.5)\n"
+                               "1 (AMD's default) treats fog, steam and dirt as noise and removes them,\n"
+                               "leaving the image darker than the game's. Lower keeps them,\n"
+                               "with the same stability in tests");
+            }
 
-            ShowHelpMarker("How the game's noisy image is split between the diffuse and specular denoisers\n"
-                           "Albedo ratio: by diffuse vs specular albedo\n"
-                           "All specular: everything through the roughness aware specular denoiser\n"
-                           "Roughness weighted: smooth surfaces specular (sharper reflections), rough ones by albedo");
+            bool exposureCompensation = config->FsrdExposureCompensation.value_or_default();
+            if (ImGui::Checkbox("Exposure Compensation", &exposureCompensation))
+                config->FsrdExposureCompensation = exposureCompensation;
 
-            const char* signalTypes[] = { "Indirect (hit distance)", "Direct (no hit distance)" };
-            int signalType = std::clamp(config->FsrdSignalType.value_or_default(), 0, 1);
-
-            if (ImGui::Combo("Signal Type", &signalType, signalTypes, IM_ARRAYSIZE(signalTypes)))
-                config->FsrdSignalType = signalType;
-
-            ShowHelpMarker("Which FSR Ray Regeneration signals the game's image is denoised as\n"
-                           "Indirect: uses the game's reflection hit distance (Diffuse Hit Distance for diffuse)\n"
-                           "Direct: no hit distance, Diffuse Hit Distance and Spec Hit Distance Scale unused\n"
-                           "Changing it recreates the denoiser (history starts over)");
-
-            float hitDistance = config->FsrdDiffuseHitDistance.value_or_default();
-            if (ImGui::SliderFloat("Diffuse Hit Distance", &hitDistance, 0.1f, 100.0f, "%.1f",
-                                   ImGuiSliderFlags_Logarithmic))
-                config->FsrdDiffuseHitDistance = hitDistance;
-
-            ShowHelpMarker("DLSS-RR doesn't provide one, used for the diffuse signal\n"
-                           "Larger is smoother, smaller keeps more contact detail");
-
-            float reflectionReactive = config->FsrdReflectionReactive.value_or_default();
-            if (ImGui::SliderFloat("Reflection Reactive", &reflectionReactive, 0.0f, 1.0f, "%.2f"))
-                config->FsrdReflectionReactive = reflectionReactive;
-
-            ShowHelpMarker("Reduces the upscaler's ghosting on reflections\n"
-                           "Higher trusts the current frame more on smooth reflective surfaces\n"
-                           "0 only uses the game's own reactive mask");
-
-            float hitScale = config->FsrdSpecHitDistanceScale.value_or_default();
-            if (ImGui::SliderFloat("Spec Hit Distance Scale", &hitScale, 0.01f, 1000.0f, "%.2f",
-                                   ImGuiSliderFlags_Logarithmic))
-                config->FsrdSpecHitDistanceScale = hitScale;
-
-            ShowHelpMarker("Multiplier for the game's specular ray hit distance\n"
-                           "Used to reproject reflections, a wrong scale causes ghosting and noisy mirrors");
-
-            const char* particleModes[] = { "Off", "Over denoised color", "Show raw texture (debug)" };
-            int particleLayer = std::clamp(config->FsrdParticleLayer.value_or_default(), 0, 2);
-
-            if (ImGui::Combo("Particles", &particleLayer, particleModes, IM_ARRAYSIZE(particleModes)))
-                config->FsrdParticleLayer = particleLayer;
-
-            ShowHelpMarker("Steam and smoke the game sends in DLSSD.ColorBeforeParticles\n"
-                           "Off: not shown\n"
-                           "Over denoised color: puts that layer over the result, undenoised\n"
-                           "Show raw texture: upscales that texture as is, no denoise");
+            ShowHelpMarker("Tracks the game's auto exposure, which Cyberpunk doesn't report,\n"
+                           "so the denoiser's history doesn't keep the old brightness.\n"
+                           "Without it, light seems to adjust after turning the camera");
 
             const char* transparencyModes[] = { "Off", "Denoise before transparency", "Show raw texture (debug)" };
             int transparencyLayer = std::clamp(config->FsrdTransparencyLayer.value_or_default(), 0, 2);
@@ -2884,39 +2784,16 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                            "and particles (or fog), which go back over the result undenoised\n"
                            "Show raw texture: upscales that texture as is, to see what it holds");
 
-            float farPassthrough = config->FsrdFarPassthrough.value_or_default();
-            if (ImGui::SliderFloat("Far Passthrough", &farPassthrough, 0.0f, 1000.0f,
-                                   farPassthrough > 0.0f ? "%.0f m" : "Off"))
-                config->FsrdFarPassthrough = farPassthrough;
+            const char* particleModes[] = { "Off", "Over denoised color", "Show raw texture (debug)" };
+            int particleLayer = std::clamp(config->FsrdParticleLayer.value_or_default(), 0, 2);
 
-            ShowHelpMarker("Scene farther than this skips the denoiser and keeps the game's image,\n"
-                           "including its distant fog. Off denoises everything but the sky.\n"
-                           "Too close a value leaves distant noise and a visible edge");
+            if (ImGui::Combo("Particles", &particleLayer, particleModes, IM_ARRAYSIZE(particleModes)))
+                config->FsrdParticleLayer = particleLayer;
 
-            float mirrorPassthrough = config->FsrdMirrorPassthrough.value_or_default();
-            if (ImGui::SliderFloat("Mirror Passthrough", &mirrorPassthrough, 0.0f, 0.5f,
-                                   mirrorPassthrough > 0.0f ? "%.2f" : "Off"))
-                config->FsrdMirrorPassthrough = mirrorPassthrough;
-
-            ShowHelpMarker("Surfaces smoother than this roughness keep the game's own reflection\n"
-                           "(puddles, chrome, glass) instead of the denoised one, which blurs mirrors\n"
-                           "when the game sends no specular hit distance. Higher keeps more raw noise");
-
-            float demodulation = config->FsrdDemodulation.value_or_default();
-            if (ImGui::SliderFloat("Demodulation", &demodulation, 0.0f, 1.0f, "%.2f"))
-                config->FsrdDemodulation = demodulation;
-
-            ShowHelpMarker("How much the color is divided by the surface albedo before denoising\n"
-                           "1 keeps texture detail best, but fog and haze turn into light on the\n"
-                           "surfaces (flat, painted look). Lower keeps fog, softens textures");
-
-            float demodFade = config->FsrdDemodFadeDistance.value_or_default();
-            if (ImGui::SliderFloat("Demod Fade Distance", &demodFade, 0.0f, 500.0f,
-                                   demodFade > 0.0f ? "%.0f m" : "Off"))
-                config->FsrdDemodFadeDistance = demodFade;
-
-            ShowHelpMarker("Demodulation fades to 0 from half this distance to this distance,\n"
-                           "so distant fog stays fog. Off uses Demodulation everywhere");
+            ShowHelpMarker("Steam and smoke the game sends in DLSSD.ColorBeforeParticles (Cyberpunk)\n"
+                           "Off: not shown\n"
+                           "Over denoised color: puts that layer over the result, undenoised\n"
+                           "Show raw texture: upscales that texture as is, no denoise");
 
             float defaultSharpness = config->FsrdDefaultSharpness.value_or_default();
             if (ImGui::SliderFloat("Default Sharpness", &defaultSharpness, 0.0f, 1.0f, "%.2f"))
@@ -2925,96 +2802,113 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
             ShowHelpMarker("RCAS sharpness used when the game and the Sharpness override set none\n"
                            "(the denoiser softens fine detail). 0 turns it off");
 
-            const char* sentinelModes[] = { "Passthrough", "Denoise as diffuse" };
-            int sentinelMode = std::clamp(config->FsrdSentinelMode.value_or_default(), 0, 1);
-
-            if (ImGui::Combo("Sentinel Pixels", &sentinelMode, sentinelModes, IM_ARRAYSIZE(sentinelModes)))
-                config->FsrdSentinelMode = sentinelMode;
-
-            ShowHelpMarker("Pixels the game sends without G-buffer data\n"
-                           "(V's body, first person arms and weapon, some far objects)\n"
-                           "Passthrough: keep the game's color, no denoise\n"
-                           "Denoise as diffuse: normal facing the camera, fully rough");
-
-            // Filled with the denoiser's defaults once its context exists
-            if (config->FsrdStabilityBias.has_value())
-            {
-                float stability = config->FsrdStabilityBias.value();
-                if (ImGui::SliderFloat("Stability Bias", &stability, 0.0f, 1.0f, "%.2f"))
-                    config->FsrdStabilityBias = stability;
-
-                ShowHelpMarker("Higher is more stable (less flicker) but slower to react");
-            }
-
-            if (config->FsrdRadianceClipStdK.has_value())
-            {
-                float clip = config->FsrdRadianceClipStdK.value();
-                if (ImGui::SliderFloat("Radiance Clip", &clip, 0.5f, 100.0f, "%.1f", ImGuiSliderFlags_Logarithmic))
-                    config->FsrdRadianceClipStdK = clip;
-
-                ShowHelpMarker("Lower clamps bright outliers (fireflies, blotches) harder");
-            }
-
-            if (config->FsrdKernelRelaxation.has_value())
-            {
-                float relaxation = config->FsrdKernelRelaxation.value();
-                if (ImGui::SliderFloat("Kernel Relaxation", &relaxation, 0.0f, 1.0f, "%.2f"))
-                    config->FsrdKernelRelaxation = relaxation;
-
-                ShowHelpMarker("Gaussian kernel relaxation of the spatial filter");
-            }
-
-            if (config->FsrdMaxRadiance.has_value())
-            {
-                float maxRadiance = config->FsrdMaxRadiance.value();
-                if (ImGui::SliderFloat("Max Radiance", &maxRadiance, 0.1f, 65504.0f, "%.1f",
-                                       ImGuiSliderFlags_Logarithmic))
-                    config->FsrdMaxRadiance = maxRadiance;
-
-                ShowHelpMarker("Highest radiance the denoiser keeps (default 100)\n"
-                               "Signals are divided by albedo, so dark surfaces and fog get high values;\n"
-                               "too high lets them spread into a flat glow over bare textures,\n"
-                               "too low clamps them (fog disappearing, dark outlines)");
-            }
-
             ImGui::PopItemWidth();
+
+            if (ImGui::TreeNode("Advanced"))
+            {
+                ImGui::PushItemWidth(220.0f * menuResScale);
+
+                const char* splitModes[] = { "Albedo ratio", "All specular", "Roughness weighted" };
+                int splitMode = std::clamp(config->FsrdSplitMode.value_or_default(), 0, 2);
+
+                if (ImGui::Combo("Signal Split", &splitMode, splitModes, IM_ARRAYSIZE(splitModes)))
+                    config->FsrdSplitMode = splitMode;
+
+                ShowHelpMarker("How the game's noisy image is split between the diffuse and specular denoisers\n"
+                               "Albedo ratio: by diffuse vs specular albedo\n"
+                               "All specular: everything through the roughness aware specular denoiser\n"
+                               "Roughness weighted (default): smooth surfaces specular, rough ones by albedo");
+
+                const char* signalTypes[] = { "Indirect (hit distance)", "Direct (no hit distance)" };
+                int signalType = std::clamp(config->FsrdSignalType.value_or_default(), 0, 1);
+
+                if (ImGui::Combo("Signal Type", &signalType, signalTypes, IM_ARRAYSIZE(signalTypes)))
+                    config->FsrdSignalType = signalType;
+
+                ShowHelpMarker("Which FSR Ray Regeneration signals the game's image is denoised as\n"
+                               "Changing it recreates the denoiser (history starts over)");
+
+                float hitDistance = config->FsrdDiffuseHitDistance.value_or_default();
+                if (ImGui::SliderFloat("Diffuse Hit Distance", &hitDistance, 0.1f, 100.0f, "%.1f",
+                                       ImGuiSliderFlags_Logarithmic))
+                    config->FsrdDiffuseHitDistance = hitDistance;
+
+                ShowHelpMarker("Used for the diffuse signal when the game sends no diffuse hit distance\n"
+                               "(3 to 30 made no visible difference in tests)");
+
+                float hitScale = config->FsrdSpecHitDistanceScale.value_or_default();
+                if (ImGui::SliderFloat("Spec Hit Distance Scale", &hitScale, 0.01f, 1000.0f, "%.2f",
+                                       ImGuiSliderFlags_Logarithmic))
+                    config->FsrdSpecHitDistanceScale = hitScale;
+
+                ShowHelpMarker("Multiplier for the game's specular ray hit distance, when it sends one");
+
+                float reflectionReactive = config->FsrdReflectionReactive.value_or_default();
+                if (ImGui::SliderFloat("Reflection Reactive", &reflectionReactive, 0.0f, 1.0f, "%.2f"))
+                    config->FsrdReflectionReactive = reflectionReactive;
+
+                ShowHelpMarker("Reduces the upscaler's ghosting on reflections\n"
+                               "Higher trusts the current frame more on smooth reflective surfaces\n"
+                               "0 only uses the game's own reactive mask");
+
+                float farPassthrough = config->FsrdFarPassthrough.value_or_default();
+                if (ImGui::SliderFloat("Far Passthrough", &farPassthrough, 0.0f, 1000.0f,
+                                       farPassthrough > 0.0f ? "%.0f m" : "Off"))
+                    config->FsrdFarPassthrough = farPassthrough;
+
+                ShowHelpMarker("Scene farther than this skips the denoiser and keeps the game's image,\n"
+                               "including its distant fog. Off denoises everything but the sky.\n"
+                               "Too close a value leaves distant noise and a visible edge");
+
+                const char* sentinelModes[] = { "Passthrough", "Denoise as diffuse" };
+                int sentinelMode = std::clamp(config->FsrdSentinelMode.value_or_default(), 0, 1);
+
+                if (ImGui::Combo("Sentinel Pixels", &sentinelMode, sentinelModes, IM_ARRAYSIZE(sentinelModes)))
+                    config->FsrdSentinelMode = sentinelMode;
+
+                ShowHelpMarker("Pixels the game sends without G-buffer data\n"
+                               "(V's body, first person arms and weapon, some far objects)\n"
+                               "Passthrough: keep the game's color, no denoise\n"
+                               "Denoise as diffuse: normal facing the camera, fully rough");
+
+                if (config->FsrdRadianceClipStdK.has_value())
+                {
+                    float clip = config->FsrdRadianceClipStdK.value();
+                    if (ImGui::SliderFloat("Radiance Clip", &clip, 0.5f, 100.0f, "%.1f",
+                                           ImGuiSliderFlags_Logarithmic))
+                        config->FsrdRadianceClipStdK = clip;
+
+                    ShowHelpMarker("Lower clamps bright outliers harder (2 darkened whole scenes in tests)");
+                }
+
+                if (config->FsrdKernelRelaxation.has_value())
+                {
+                    float relaxation = config->FsrdKernelRelaxation.value();
+                    if (ImGui::SliderFloat("Kernel Relaxation", &relaxation, 0.0f, 1.0f, "%.2f"))
+                        config->FsrdKernelRelaxation = relaxation;
+
+                    ShowHelpMarker("Gaussian kernel relaxation of the spatial filter\n"
+                                   "(1 kept more energy but flattened facades in tests)");
+                }
+
+                if (config->FsrdMaxRadiance.has_value())
+                {
+                    float maxRadiance = config->FsrdMaxRadiance.value();
+                    if (ImGui::SliderFloat("Max Radiance", &maxRadiance, 0.1f, 65504.0f, "%.1f",
+                                           ImGuiSliderFlags_Logarithmic))
+                        config->FsrdMaxRadiance = maxRadiance;
+
+                    ShowHelpMarker("Highest radiance the denoiser keeps (default 100)\n"
+                                   "Signals are divided by albedo, so dark surfaces and fog get high values;\n"
+                                   "too high lets them spread into a flat glow over bare textures");
+                }
+
+                ImGui::PopItemWidth();
+                ImGui::TreePop();
+            }
 
             if (ImGui::TreeNode("Diagnostics"))
             {
-                // Timed capture: tags the probe lines in the log and writes a per point summary
-                auto fsrdFeature = dynamic_cast<FSRDFeatureDx12*>(currentFeature);
-
-                if (auto probe = fsrdFeature != nullptr ? fsrdFeature->Probe() : nullptr; probe != nullptr)
-                {
-                    static int captureLabel = 0;
-                    ImGui::PushItemWidth(120.0f * menuResScale);
-                    ImGui::Combo("##ProbeCaptureLabel", &captureLabel, FsrdProbe::CaptureLabels,
-                                 FsrdProbe::CaptureLabelCount);
-                    ImGui::PopItemWidth();
-                    ImGui::SameLine();
-
-                    const float remaining = probe->CaptureRemaining();
-
-                    if (probe->CapturePending())
-                    {
-                        ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)),
-                                           "Starts in %.1f s, close the menu", probe->CaptureCountdown());
-                    }
-                    else if (remaining > 0.0f)
-                    {
-                        ImGui::TextColored(toneMapColor(ImVec4(0.3f, 0.8f, 1.f, 1.f)), "Capturing #%d: %.1f s",
-                                           probe->CaptureCount(), remaining);
-                    }
-                    else if (ImGui::Button("Start capture (10 s)"))
-                    {
-                        probe->StartCapture(captureLabel);
-                    }
-
-                    ShowHelpMarker("Records the denoiser inputs at 5 screen points for 10 s\n"
-                                   "(~7 samples/s) and writes a summary per point to OptiScaler.log.\n"
-                                   "Starts 2 s after pressing: close the menu, a timer shows on screen.");
-                }
-
                 if (auto dump = fsrdFeature != nullptr ? fsrdFeature->FrameDump() : nullptr; dump != nullptr)
                 {
                     static char dumpLabel[32] = "scene";
@@ -3031,8 +2925,8 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                     if (dump->Busy())
                     {
                         if (const float countdown = dump->Countdown(); countdown > 0.0f)
-                            ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)), "Starts in %.1f s, close the menu",
-                                               countdown);
+                            ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)),
+                                               "Starts in %.1f s, close the menu", countdown);
                         else
                             ImGui::TextColored(toneMapColor(ImVec4(0.3f, 0.8f, 1.f, 1.f)), "Capturing %d/%d",
                                                dump->Taken(), dump->Requested());
@@ -3076,16 +2970,8 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
 
                 ShowHelpMarker("Once per second writes a summary of the whole image to\n"
                                "status.txt and metrics.csv in the capture folder and the log:\n"
-                               "brightness and "
-                               "color change against the game's image, clamped signals,\n"
-                               "noise left and flicker. Costs well under 0.1 ms.");
-
-                bool diagnostics = config->FsrdDiagnostics.value_or_default();
-                if (ImGui::Checkbox("Diagnostics log", &diagnostics))
-                    config->FsrdDiagnostics = diagnostics;
-
-                ShowHelpMarker("Logs the inputs at a few screen points every 120 frames.\n"
-                               "Captures always log.");
+                               "brightness and color change against the game's image, clamped signals,\n"
+                               "noise left and flicker. Also logs video memory every ~30 s.");
 
                 bool bypassDenoiser = config->FsrdBypassDenoiser.value_or_default();
                 if (ImGui::Checkbox("Bypass denoiser (upscale only)", &bypassDenoiser))
@@ -3107,21 +2993,6 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                 ShowHelpMarker("Recreates the denoiser with AMD's input validation.\n"
                                "Problems with what Ray Regen Bridge sends are written to OptiScaler.log\n"
                                "('FSRD validation' lines). Slower. Not saved to the ini.");
-
-                bool roughnessOverride = config->FsrdRoughnessOverrideEnabled.value_or_default();
-                if (ImGui::Checkbox("Override Roughness", &roughnessOverride))
-                    config->FsrdRoughnessOverrideEnabled = roughnessOverride;
-
-                ShowHelpMarker("Use a constant roughness for every surface instead of the game's");
-
-                if (roughnessOverride)
-                {
-                    ImGui::PushItemWidth(220.0f * menuResScale);
-                    float roughness = config->FsrdRoughnessOverride.value_or_default();
-                    if (ImGui::SliderFloat("Roughness", &roughness, 0.0f, 1.0f, "%.2f"))
-                        config->FsrdRoughnessOverride = roughness;
-                    ImGui::PopItemWidth();
-                }
 
                 ImGui::TreePop();
             }
@@ -8427,7 +8298,7 @@ bool MenuCommon::RenderMenu()
     RenderNotifications(ctx);
     UpdateFrameTimeAverages(ctx);
     RenderPerformanceOverlay(ctx);
-    RenderProbeCaptureOverlay(ctx);
+    RenderRemoteOverlay(ctx);
 
     // 4) Draw the full settings menu last so popups and child windows keep their existing behavior.
     RenderMainMenuWindow(ctx);

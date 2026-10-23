@@ -113,9 +113,12 @@ def analyze_frame(folder, tile, quiet=False):
     report = [f'# Capture {os.path.basename(os.path.normpath(folder))}', '',
               f"render {rw}x{rh}, display {meta['display'][0]}x{meta['display'][1]}, flags 0x{meta['flags']:x}, "
               f"pre-exposure {meta['preExposure']}, split mode {meta['splitMode']}, max radiance {meta['maxRadiance']}, "
-              f"demodulation {meta['demodulation']}, mirror {meta['mirrorRoughness']}, "
-              f"demod fade {meta['demodFadeDistance']}, far passthrough {meta['farPassthrough']}", '',
+              f"stability bias {meta.get('stabilityBias')}, exposure compensation {meta.get('exposureCompensation')}, "
+              f"far passthrough {meta.get('farPassthrough')}", '',
               'Textures: ' + ', '.join(sorted(tex)), '']
+    if 'exposure' in tex:
+        report += [f"Tracked exposure (game's auto exposure relative to when tracking started): "
+                   f"{float(tex['exposure'][0, 0, 0]):.3f}", '']
 
     # Previews: the game's color sets the exposure every color-like texture is shown with
     color = tex['color'][..., :3]
@@ -151,7 +154,7 @@ def analyze_frame(folder, tile, quiet=False):
                f'skin {skin.mean():.1%}, sentinel {sentinel.mean():.1%}', '']
 
     # 1. Split check: modulations as the prepass computes them (fsrd_common.hlsli GetModulation)
-    demod = float(meta['demodulation'])
+    demod = float(meta.get('demodulation', 1.0))  # older captures only
     dmod = np.maximum(da, MIN_ALBEDO) ** demod
     smod = (np.maximum(sa, MIN_ALBEDO) if meta['splitMode'] == SPLIT_ALBEDO else np.maximum(da + sa, MIN_ALBEDO)) ** demod
     emissive = np.maximum(tex['emissive'][..., :3], 0) if 'emissive' in tex else 0.0
@@ -321,6 +324,7 @@ def analyze_burst(folder, frames, tile):
         mv = read_dds(os.path.join(path, 'ffx_motion_vectors.dds'))[:rh, :rw]
         depth = read_dds(os.path.join(path, 'linear_depth.dds'))[:rh, :rw, 0]
         cur = {'color': color, 'composed': composed, 'depth': depth}
+        frame_gain = float(luma(composed).mean() / max(luma(color).mean(), 1e-6) - 1)
 
         if len(sheet) < 8:
             sheet.append(tonemap(composed)[0][::2, ::2])
@@ -350,7 +354,7 @@ def analyze_burst(folder, frames, tile):
             sums_o += t_o * w
             sums_c += t_c * w
             counts += w
-            per_frame.append((meta['frameIndex'], meta['timeMs'], float(valid.mean()),
+            per_frame.append((meta['frameIndex'], meta['timeMs'], frame_gain, float(valid.mean()),
                               float(np.median(ch_o[valid])) if valid.any() else 0.0,
                               float(np.median(ch_c[valid])) if valid.any() else 0.0))
         prev = cur
@@ -362,8 +366,13 @@ def analyze_burst(folder, frames, tile):
         mean_c = sums_c / np.maximum(counts, 1)
         ok = counts > 0
         ratio = np.where(ok, mean_o / np.maximum(mean_c, 1e-4), 0)
-        report += ['| frame | time ms | valid reprojection | composed change | input change |', '|---|---|---|---|---|']
-        report += [f'| {i} | {t:.0f} | {v:.0%} | {o:.3f} | {c:.3f} |' for i, t, v, o, c in per_frame]
+        report += ['| frame | time ms | composed / input brightness | valid reprojection | composed change | input change |',
+                   '|---|---|---|---|---|---|']
+        report += [f'| {i} | {t:.0f} | {pct(g)} | {v:.0%} | {o:.3f} | {c:.3f} |' for i, t, g, v, o, c in per_frame]
+        gains = [g for _, _, g, _, _, _ in per_frame]
+        report += ['', f'- composed / input brightness over the burst: min {pct(min(gains))}, max {pct(max(gains))}, '
+                   f'spread {100 * (max(gains) - min(gains)):.0f} points (large while turning = lag behind the '
+                   f"game's exposure)"]
         report += ['', f'- median temporal change: composed {np.median(mean_o[ok]):.3f}, input '
                    f'{np.median(mean_c[ok]):.3f}, ratio {np.median(ratio[ok]):.2f}',
                    f'- tiles where the composed image changes more than 0.15 per frame: {np.mean(mean_o[ok] > 0.15):.1%}',

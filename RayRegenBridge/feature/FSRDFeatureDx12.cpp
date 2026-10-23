@@ -9,6 +9,8 @@
 #include <RayRegenBridge/shaders/fsrd_prepass_Shader.h>
 #include <RayRegenBridge/shaders/fsrd_compose_Shader.h>
 #include <RayRegenBridge/shaders/fsrd_particles_Shader.h>
+#include <RayRegenBridge/shaders/fsrd_exposure_tiles_Shader.h>
+#include <RayRegenBridge/shaders/fsrd_exposure_reduce_Shader.h>
 
 // FSR Ray Regeneration API (ffx_denoiser.h 1.2.0), wrapped so it builds on the same ffx_api.h OptiScaler already
 // uses -- see ffx_denoiser_compat.h for why the real header can't be included directly. ffxApiGetResourceDX12 comes
@@ -55,7 +57,6 @@ constexpr uint32_t FlagSeparateRoughness = 0x1;
 constexpr uint32_t FlagHasSpecHitDistance = 0x2;
 constexpr uint32_t FlagDepthInverted = 0x4;
 constexpr uint32_t FlagParticleLayer = 0x8;
-constexpr uint32_t FlagCountSentinels = 0x10;
 constexpr uint32_t FlagLinearDepth = 0x20;
 constexpr uint32_t FlagTransparencyLayer = 0x40;
 constexpr uint32_t FlagNormalsUnorm = 0x80;
@@ -63,6 +64,9 @@ constexpr uint32_t FlagSssGuide = 0x100;
 constexpr uint32_t FlagLayerOpacity = 0x200;
 constexpr uint32_t FlagDiffuseHit = 0x400;
 constexpr uint32_t FlagDiffuseHitInW = 0x800;
+constexpr uint32_t FlagExposure = 0x1000;
+constexpr uint32_t FlagExposureReset = 0x2000;
+constexpr UINT ExposureTileSize = 64;
 
 // Normals stored as UNORM (xyz = 2 * v - 1 to decode); float and SNORM formats are already signed
 static bool IsUnormNormals(DXGI_FORMAT format)
@@ -88,6 +92,7 @@ constexpr float SkyDepthBound = 50000.0f;
 
 // [FSRD] MaxRadiance when the ini leaves it on auto (the denoiser's own default is 65504)
 constexpr float DefaultMaxRadiance = 100.0f;
+constexpr float DefaultStabilityBias = 0.5f;
 
 // Disable the denoiser for the session after this many failures, upscaling keeps running
 constexpr int MaxDenoiserFailures = 3;
@@ -186,7 +191,8 @@ FSRDFeatureDx12::~FSRDFeatureDx12()
 
     std::thread(
         [retired = std::move(_retired), prepass = std::move(_prepass), compose = std::move(_compose),
-         particles = std::move(_particlesPass), probe = std::move(_probe),
+         particles = std::move(_particlesPass), exposureTiles = std::move(_exposureTilesPass),
+         exposureReduce = std::move(_exposureReducePass),
          frameDump = std::move(_frameDump), metrics = std::move(_metrics)]() mutable
         {
             std::this_thread::sleep_for(std::chrono::seconds(2));
@@ -356,7 +362,10 @@ bool FSRDFeatureDx12::CreateDenoiserContext()
         FfxApiConfigureDenoiserKey key;
         float bridgeDefault; // negative: keep the denoiser's default
     } tunables[] = {
-        { &Config::Instance()->FsrdStabilityBias, FFX_API_CONFIGURE_DENOISER_KEY_STABILITY_BIAS, -1.0f },
+        // 1 (AMD's) treats sparse bright samples as noise: fog, steam and dirt on walls are filtered away and the
+        // image ends up 20-35% darker than the game's; 0.5 keeps them with the same temporal stability (tests 22/10)
+        { &Config::Instance()->FsrdStabilityBias, FFX_API_CONFIGURE_DENOISER_KEY_STABILITY_BIAS,
+          DefaultStabilityBias },
         { &Config::Instance()->FsrdRadianceClipStdK, FFX_API_CONFIGURE_DENOISER_KEY_RADIANCE_CLIP_STD_K, -1.0f },
         { &Config::Instance()->FsrdKernelRelaxation, FFX_API_CONFIGURE_DENOISER_KEY_GAUSSIAN_KERNEL_RELAXATION, -1.0f },
         // 65504 lets fog and light over dark albedo (color / albedo) grow huge, the denoiser spreads them into a flat
@@ -483,7 +492,7 @@ bool FSRDFeatureDx12::ResizeForRenderSize(unsigned int renderWidth, unsigned int
              renderHeight, _maxRenderWidth, _maxRenderHeight);
 
     for (auto resource : { &_diffuseIn, &_diffuseOut, &_specularIn, &_specularOut, &_linearDepth, &_packedNormals,
-                           &_motionVectors })
+                           &_motionVectors, &_exposureHistory[0], &_exposureHistory[1], &_exposureTiles, &_exposure })
     {
         Retire(*resource);
     }
@@ -519,14 +528,21 @@ bool FSRDFeatureDx12::CreateScratchResources()
            CreateScratchTexture(Device, w, h, DXGI_FORMAT_R32_FLOAT, read, L"FSRD_LinearDepth", &_linearDepth) &&
            CreateScratchTexture(Device, w, h, ScratchFormat, read, L"FSRD_PackedNormals", &_packedNormals) &&
            CreateScratchTexture(Device, w, h, ScratchFormat, read, L"FSRD_MotionVectors", &_motionVectors) &&
-           (_sentinelCounter != nullptr || CreateScratchTexture(Device, 2, 1, DXGI_FORMAT_R32_UINT, write,
-                                                                L"FSRD_SentinelCounter", &_sentinelCounter));
+           CreateScratchTexture(Device, w, h, DXGI_FORMAT_R32G32_FLOAT, read, L"FSRD_ExposureHistory0",
+                                &_exposureHistory[0]) &&
+           CreateScratchTexture(Device, w, h, DXGI_FORMAT_R32G32_FLOAT, read, L"FSRD_ExposureHistory1",
+                                &_exposureHistory[1]) &&
+           CreateScratchTexture(Device, (w + ExposureTileSize - 1) / ExposureTileSize,
+                                (h + ExposureTileSize - 1) / ExposureTileSize, DXGI_FORMAT_R32G32B32A32_FLOAT, write,
+                                L"FSRD_ExposureTiles", &_exposureTiles) &&
+           CreateScratchTexture(Device, 1, 1, DXGI_FORMAT_R32_FLOAT, read, L"FSRD_Exposure", &_exposure);
 }
 
-std::array<ID3D12Resource**, 11> FSRDFeatureDx12::ScratchResources()
+std::array<ID3D12Resource**, 14> FSRDFeatureDx12::ScratchResources()
 {
-    return { &_diffuseIn,     &_diffuseOut,      &_specularIn,    &_specularOut,  &_linearDepth,  &_packedNormals,
-             &_motionVectors, &_sentinelCounter, &_composedColor, &_reactiveMask, &_bypassColor };
+    return { &_diffuseIn,          &_diffuseOut,         &_specularIn,    &_specularOut,  &_linearDepth,
+             &_packedNormals,      &_motionVectors,      &_composedColor, &_reactiveMask, &_bypassColor,
+             &_exposureHistory[0], &_exposureHistory[1], &_exposureTiles, &_exposure };
 }
 
 
@@ -733,23 +749,27 @@ bool FSRDFeatureDx12::InitInternal(ID3D12GraphicsCommandList* InCommandList, NVS
     _validation = Config::Instance()->FsrdValidation.value_or_default();
     _directSignals = Config::Instance()->FsrdSignalType.value_or_default() == 1;
 
-    _prepass = std::make_unique<FsrdPass_Dx12>("FSRD Prepass", Device, 11, 6, fsrd_prepass_cso, sizeof(fsrd_prepass_cso));
+    _prepass = std::make_unique<FsrdPass_Dx12>("FSRD Prepass", Device, 12, 5, fsrd_prepass_cso, sizeof(fsrd_prepass_cso));
     _compose =
         std::make_unique<FsrdPass_Dx12>("FSRD Compose", Device, 14, 2, fsrd_compose_cso, sizeof(fsrd_compose_cso));
     _particlesPass = std::make_unique<FsrdPass_Dx12>("FSRD Particles", Device, 2, 1, fsrd_particles_cso,
                                                      sizeof(fsrd_particles_cso));
-    // Diagnostics only, the denoiser works without it
-    _probe = std::make_unique<FsrdProbe>(Device);
+    _exposureTilesPass = std::make_unique<FsrdPass_Dx12>("FSRD Exposure Tiles", Device, 5, 2,
+                                                         fsrd_exposure_tiles_cso, sizeof(fsrd_exposure_tiles_cso));
+    _exposureReducePass = std::make_unique<FsrdPass_Dx12>("FSRD Exposure Reduce", Device, 1, 1,
+                                                          fsrd_exposure_reduce_cso, sizeof(fsrd_exposure_reduce_cso));
     _frameDump = std::make_unique<FsrdFrameDump>(Device);
     _metrics = std::make_unique<FsrdMetrics>(Device);
 
-    if (!_prepass->CanRender() || !_compose->CanRender() || !_particlesPass->CanRender())
+    if (!_prepass->CanRender() || !_compose->CanRender() || !_particlesPass->CanRender() ||
+        !_exposureTilesPass->CanRender() || !_exposureReducePass->CanRender())
     {
         LOG_ERROR("FSR Ray Regeneration init failed, only upscaling");
         _prepass.reset();
         _compose.reset();
         _particlesPass.reset();
-        _probe.reset();
+        _exposureTilesPass.reset();
+        _exposureReducePass.reset();
         _frameDump.reset();
         _metrics.reset();
         _denoiserDisabled = true;
@@ -782,7 +802,7 @@ bool FSRDFeatureDx12::EnsureDenoiser(unsigned int renderWidth, unsigned int rend
         return true;
 
     for (auto resource : { &_diffuseIn, &_diffuseOut, &_specularIn, &_specularOut, &_linearDepth, &_packedNormals,
-                           &_motionVectors, &_sentinelCounter })
+                           &_motionVectors, &_exposureHistory[0], &_exposureHistory[1], &_exposureTiles, &_exposure })
     {
         Retire(*resource);
     }
@@ -943,10 +963,7 @@ FsrdPass_Dx12::Constants FSRDFeatureDx12::BuildConstants(const FrameInputs& in, 
                       (in.normalsUnorm ? FlagNormalsUnorm : 0) | (in.sssGuide != nullptr ? FlagSssGuide : 0) |
                       (in.particles != nullptr && in.layerOpacity != nullptr ? FlagLayerOpacity : 0) |
                       (in.diffuseHit != nullptr ? FlagDiffuseHit : 0) | (in.diffuseHitInW ? FlagDiffuseHitInW : 0);
-    // The prepass divides the game's color by PreExposure and compose multiplies the result back, so SignalScale
-    // only changes the range the denoiser works in (it may filter in a compressed space, which loses energy of
-    // sparse bright samples such as noisy fog)
-    constants.PreExposure = in.preExposure / std::clamp(config->FsrdSignalScale.value_or_default(), 0.001f, 100.0f);
+    constants.PreExposure = in.preExposure;
     constants.RenderWidth = in.renderWidth;
     constants.RenderHeight = in.renderHeight;
     constants.SkyDepth = SkyDepth;
@@ -977,13 +994,21 @@ FsrdPass_Dx12::Constants FSRDFeatureDx12::BuildConstants(const FrameInputs& in, 
     constants.ReflectionReactive = std::clamp(config->FsrdReflectionReactive.value_or_default(), 0.0f, 1.0f);
     constants.GameMaskBias = config->DlssReactiveMaskBias.value_or_default();
     constants.SpecHitScale = std::max(config->FsrdSpecHitDistanceScale.value_or_default(), 0.0001f);
-    constants.RoughnessOverride = config->FsrdRoughnessOverrideEnabled.value_or_default()
-                                      ? std::clamp(config->FsrdRoughnessOverride.value_or_default(), 0.0f, 1.0f)
-                                      : -1.0f;
 
-    constants.MirrorRoughness = std::clamp(config->FsrdMirrorPassthrough.value_or_default(), 0.0f, 1.0f);
-    constants.Demodulation = std::clamp(config->FsrdDemodulation.value_or_default(), 0.0f, 1.0f);
-    constants.DemodFadeDistance = std::max(config->FsrdDemodFadeDistance.value_or_default(), 0.0f);
+    constants.ExposureTilesX = (in.renderWidth + ExposureTileSize - 1) / ExposureTileSize;
+    constants.ExposureTilesY = (in.renderHeight + ExposureTileSize - 1) / ExposureTileSize;
+
+    // Exposure tracking restarts with the denoiser's history (both hold values at the old exposure) and when it's
+    // turned on again
+    if (config->FsrdExposureCompensation.value_or_default())
+    {
+        constants.Flags |= FlagExposure;
+
+        if (_resetDenoiserHistory || !_exposureTracking)
+            constants.Flags |= FlagExposureReset;
+    }
+
+    _exposureTracking = (constants.Flags & FlagExposure) != 0;
     constants.MaxRadiance =
         config->FsrdMaxRadiance.has_value() ? config->FsrdMaxRadiance.value() : DefaultMaxRadiance;
 
@@ -993,14 +1018,43 @@ FsrdPass_Dx12::Constants FSRDFeatureDx12::BuildConstants(const FrameInputs& in, 
     constants.CameraForward[2] = in.view[2][2];
     constants.SentinelMode = (uint32_t) sentinelMode;
 
-    _sentinelSlot = _sentinelFrame++ % 2;
-    constants.CounterSlot = _sentinelSlot;
-
-    // The sentinel count (atomics in the prepass) is only for the probe log
-    if (_probe != nullptr && _probe->Sampling())
-        constants.Flags |= FlagCountSentinels;
-
     return constants;
+}
+
+bool FSRDFeatureDx12::RunExposure(ID3D12GraphicsCommandList* InCommandList, const FrameInputs& in,
+                                  const FsrdPass_Dx12::Constants& constants)
+{
+    if ((constants.Flags & FlagExposure) == 0)
+        return true;
+
+    const auto read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    const auto write = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+
+    // History ping-pong: last frame's luma/depth is read, this frame's written into the other texture
+    auto previous = _exposureHistory[_exposureSlot];
+    auto current = _exposureHistory[1 - _exposureSlot];
+
+    Barriers(InCommandList, { { current, read, write } });
+
+    // One 16x16 thread group per 64x64 tile
+    bool ok = _exposureTilesPass->Dispatch(InCommandList,
+                                           { in.color, in.depth, in.motionVectors, in.emissive, previous },
+                                           { _exposureTiles, current }, constants, constants.ExposureTilesX * 16,
+                                           constants.ExposureTilesY * 16);
+
+    Barriers(InCommandList, { { current, write, read }, { _exposureTiles, write, read }, { _exposure, read, write } });
+
+    // One thread group
+    ok = ok && _exposureReducePass->Dispatch(InCommandList, { _exposureTiles }, { _exposure }, constants, 1, 1);
+
+    Barriers(InCommandList, { { _exposureTiles, read, write }, { _exposure, write, read } });
+
+    _exposureSlot = 1 - _exposureSlot;
+
+    if (!ok)
+        DisableDenoiserOnFailure("FSRD exposure tracking dispatch failed");
+
+    return ok;
 }
 
 bool FSRDFeatureDx12::RunPrepass(ID3D12GraphicsCommandList* InCommandList, const FrameInputs& in,
@@ -1021,9 +1075,8 @@ bool FSRDFeatureDx12::RunPrepass(ID3D12GraphicsCommandList* InCommandList, const
                                          in.diffuseAlbedo, in.specularAlbedo, in.normals,
                                          in.separateRoughness ? in.roughness : nullptr, in.depth,
                                          in.specularHitDistance, in.motionVectors, in.sssGuide, in.diffuseHit,
-                                         in.emissive },
-                                       { _diffuseIn, _specularIn, _linearDepth, _packedNormals, _motionVectors,
-                                         _sentinelCounter },
+                                         in.emissive, _exposure },
+                                       { _diffuseIn, _specularIn, _linearDepth, _packedNormals, _motionVectors },
                                        constants, in.renderWidth, in.renderHeight);
 
     Barriers(InCommandList, { { _diffuseIn, write, read },
@@ -1178,7 +1231,7 @@ bool FSRDFeatureDx12::RunCompose(ID3D12GraphicsCommandList* InCommandList, NVSDK
     const bool ok = _compose->Dispatch(InCommandList,
                                        { in.color, in.diffuseAlbedo, in.specularAlbedo, in.depth, _diffuseOut,
                                          _specularOut, gameReactive, _packedNormals, in.particles,
-                                         in.beforeTransparency, in.layerOpacity, in.emissive, in.ghostMask, _specularIn },
+                                         in.beforeTransparency, in.layerOpacity, in.emissive, in.ghostMask, _exposure },
                                        { _composedColor, _reactiveMask }, constants, (UINT) composedDesc.Width,
                                        composedDesc.Height);
 
@@ -1191,18 +1244,6 @@ bool FSRDFeatureDx12::RunCompose(ID3D12GraphicsCommandList* InCommandList, NVSDK
         DisableDenoiserOnFailure("FSRD compose dispatch failed");
 
     return ok;
-}
-
-void FSRDFeatureDx12::RunProbe(ID3D12GraphicsCommandList* InCommandList, const FrameInputs& in,
-                               const FsrdPass_Dx12::Constants& constants)
-{
-    if (_probe == nullptr)
-        return;
-
-    _probe->Run(InCommandList, constants,
-                { in.specularHitDistance, in.normals, in.diffuseAlbedo, in.specularAlbedo, _linearDepth,
-                  _packedNormals, _sentinelCounter, _sentinelSlot },
-                in.view);
 }
 
 ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters)
@@ -1218,8 +1259,9 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
     const auto constants = BuildConstants(in, InParameters);
     ApplyTuning();
 
-    // 1. Prepass: game resources -> demodulated signals, linear depth, packed normals, MVs with depth delta
-    if (!RunPrepass(InCommandList, in, constants))
+    // 1. Exposure tracking, then prepass: game resources -> demodulated signals, linear depth, packed normals, MVs
+    // with depth delta
+    if (!RunExposure(InCommandList, in, constants) || !RunPrepass(InCommandList, in, constants))
         return nullptr;
 
     // 2. FSR Ray Regeneration
@@ -1227,17 +1269,12 @@ ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandLis
         return nullptr;
 
     if (_debugView)
-    {
-        // The probe reads the inputs, which are the same in debug view
-        RunProbe(InCommandList, in, constants);
         return _composedColor;
-    }
 
     // 3. Compose: denoised signals * albedo (+ particle layer) -> composed color and reactive mask
     if (!RunCompose(InCommandList, InParameters, in, constants))
         return nullptr;
 
-    RunProbe(InCommandList, in, constants);
     RunFrameDump(InCommandList, InParameters, in, constants);
 
     if (_metrics != nullptr)
@@ -1269,20 +1306,20 @@ void FSRDFeatureDx12::RunFrameDump(ID3D12GraphicsCommandList* InCommandList, NVS
         "  \"preExposure\": {},\n  \"splitMode\": {},\n  \"diffuseHitDistance\": {},\n"
         "  \"skyDepth\": {},\n  \"projZZ\": {},\n  \"projWZ\": {},\n"
         "  \"maxRadiance\": {},\n  \"stabilityBias\": {},\n  \"radianceClipStdK\": {},\n"
-        "  \"kernelRelaxation\": {},\n  \"mirrorRoughness\": {},\n  \"demodulation\": {},\n"
-        "  \"demodFadeDistance\": {},\n  \"farPassthrough\": {},\n  \"transparencyLayer\": {},\n"
+        "  \"kernelRelaxation\": {},\n  \"exposureCompensation\": {},\n"
+        "  \"farPassthrough\": {},\n  \"transparencyLayer\": {},\n"
         "  \"particleLayer\": {},\n  \"signalType\": {},\n  \"sentinelMode\": {},\n"
-        "  \"reflectionReactive\": {},\n  \"signalScale\": {}",
+        "  \"reflectionReactive\": {},\n  \"exposureTexture\": {}",
         in.renderWidth, in.renderHeight, DisplayWidth(), DisplayHeight(), constants.Flags, constants.PreExposure,
         constants.SplitMode, constants.DiffuseHitDistance, constants.SkyDepth, constants.ProjZZ, constants.ProjWZ,
         config->FsrdMaxRadiance.has_value() ? std::format("{}", config->FsrdMaxRadiance.value())
                                             : std::format("{}", DefaultMaxRadiance),
         tunable(config->FsrdStabilityBias), tunable(config->FsrdRadianceClipStdK),
-        tunable(config->FsrdKernelRelaxation), constants.MirrorRoughness, constants.Demodulation,
-        constants.DemodFadeDistance, config->FsrdFarPassthrough.value_or_default(),
+        tunable(config->FsrdKernelRelaxation), config->FsrdExposureCompensation.value_or_default(),
+        config->FsrdFarPassthrough.value_or_default(),
         config->FsrdTransparencyLayer.value_or_default(), config->FsrdParticleLayer.value_or_default(),
         config->FsrdSignalType.value_or_default(), constants.SentinelMode, constants.ReflectionReactive,
-        config->FsrdSignalScale.value_or_default());
+        _exposure != nullptr);
 
     const auto read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     const auto write = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
@@ -1312,6 +1349,7 @@ void FSRDFeatureDx12::RunFrameDump(ID3D12GraphicsCommandList* InCommandList, NVS
                       { "packed_normals", _packedNormals },
                       { "linear_depth", _linearDepth },
                       { "ffx_motion_vectors", _motionVectors },
+                      { "exposure", _exposure },
                       { "composed", _composedColor },
                       { "reactive", _reactiveMask } },
                     metadata);
@@ -1445,8 +1483,8 @@ bool FSRDFeatureDx12::EvaluateInternal(ID3D12GraphicsCommandList* InCommandList,
     _evalFrame++;
     ReleaseRetired();
 
-    // ~30 s at 60 fps, only with the Diagnostics option
-    if (_evalFrame % 1800 == 0 && Config::Instance()->FsrdDiagnostics.value_or_default())
+    // ~30 s at 60 fps, only with live metrics
+    if (_evalFrame % 1800 == 0 && FsrdMetrics::Enabled())
         LogVideoMemory("periodic");
 
     ID3D12Resource* composed = nullptr;

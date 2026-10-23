@@ -16,7 +16,6 @@
 
 #include <upscalers/ffx/FFXFeature_Dx12.h>
 #include "FsrdPass_Dx12.h"
-#include "FsrdProbe.h"
 #include "FsrdFrameDump.h"
 #include "FsrdMetrics.h"
 #include <array>
@@ -73,14 +72,19 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     ID3D12Resource* _composedColor = nullptr;   // same size/format as the game's color, recreated when it changes
     ID3D12Resource* _reactiveMask = nullptr;    // R8, same size as the composed color, given to FSR as FSR.reactive
     ID3D12Resource* _bypassColor = nullptr;     // bypass: game color + particle layer, created when first used
-    ID3D12Resource* _sentinelCounter = nullptr; // 2x1 R32_UINT, sentinel texels per frame, ping-ponged
-    uint32_t _sentinelFrame = 0;
-    uint32_t _sentinelSlot = 0; // SentinelCounter texel the current frame counts into
+    // Exposure tracking (the game's auto exposure, which Cyberpunk doesn't report): luma + depth of the last two
+    // frames, per tile sums and the tracked exposure (1x1, read by prepass and compose)
+    ID3D12Resource* _exposureHistory[2] {};
+    ID3D12Resource* _exposureTiles = nullptr;
+    ID3D12Resource* _exposure = nullptr;
+    uint32_t _exposureSlot = 0;     // _exposureHistory holding the previous frame
+    bool _exposureTracking = false; // last frame tracked it (turning it on restarts the estimate)
 
     std::unique_ptr<FsrdPass_Dx12> _prepass;
     std::unique_ptr<FsrdPass_Dx12> _compose;
     std::unique_ptr<FsrdPass_Dx12> _particlesPass; // particle layer over the game's color (bypass)
-    std::unique_ptr<FsrdProbe> _probe; // diagnostics, null when the denoiser is off
+    std::unique_ptr<FsrdPass_Dx12> _exposureTilesPass;
+    std::unique_ptr<FsrdPass_Dx12> _exposureReducePass;
     std::unique_ptr<FsrdFrameDump> _frameDump; // diagnostics: whole frame of every stage to files
     std::unique_ptr<FsrdMetrics> _metrics;     // diagnostics: live summary per second, off unless enabled
 
@@ -136,7 +140,7 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     static void ValidationMessage(uint32_t type, const wchar_t* message);
     bool CreateScratchResources();
     bool ResizeForRenderSize(unsigned int renderWidth, unsigned int renderHeight);
-    std::array<ID3D12Resource**, 11> ScratchResources();
+    std::array<ID3D12Resource**, 14> ScratchResources();
     bool EnsureDenoiser(unsigned int renderWidth, unsigned int renderHeight);
     bool PrepareComposedColor(ID3D12Resource* color);
     void DisableDenoiserOnFailure(const char* reason);
@@ -165,8 +169,8 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
                     const FrameInputs& in, const FsrdPass_Dx12::Constants& constants);
     void RunFrameDump(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters,
                       const FrameInputs& in, const FsrdPass_Dx12::Constants& constants);
-    void RunProbe(ID3D12GraphicsCommandList* InCommandList, const FrameInputs& in,
-                  const FsrdPass_Dx12::Constants& constants);
+    bool RunExposure(ID3D12GraphicsCommandList* InCommandList, const FrameInputs& in,
+                     const FsrdPass_Dx12::Constants& constants);
 
     // Returns the composed color to upscale, or nullptr to upscale the game's color as is
     ID3D12Resource* Denoise(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters);
@@ -182,7 +186,6 @@ class FSRDFeatureDx12 : public FFXFeatureDx12
     bool DenoiserActive() const { return !_denoiserDisabled && _denoiserContextCreated; }
 
     // For the menu: input probe and timed captures, null when the denoiser is off
-    FsrdProbe* Probe() const { return _probe.get(); }
     FsrdFrameDump* FrameDump() const { return _frameDump.get(); }
 
     FSRDFeatureDx12(unsigned int InHandleId, NVSDK_NGX_Parameter* InParameters);

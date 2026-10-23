@@ -35,19 +35,15 @@ cbuffer Params : register(b0)
     float ReflectionReactive; // compose: reactive mask strength for smooth reflections, 0 = game mask only
     float GameMaskBias;       // compose: same scale OptiScaler applies to DLSS.Input.Bias.Current.Color.Mask
     float SpecHitScale;       // prepass: multiplier for the game's specular hit distance
-    float RoughnessOverride;  // prepass: >= 0 replaces the game's roughness (diagnostic)
+    float PreExposure;        // the game's color is multiplied by this (DLSS.Pre.Exposure), signals are divided by it
 
     float3 CameraForward;     // world space, for sentinel texels denoised as diffuse
     uint SentinelMode;        // SENTINEL_PASSTHROUGH or SENTINEL_DIFFUSE
 
-    uint CounterSlot;         // prepass: SentinelCounter texel counted this frame, the other one is cleared
-    float PreExposure;        // the game's color is multiplied by this (DLSS.Pre.Exposure), signals are divided by it
-    float MirrorRoughness;    // compose: below this roughness the game's raw specular replaces the denoised one, 0 = off
-    float Demodulation;       // exponent on the albedos the signals are divided by: 1 = full, 0 = none
-
-    float DemodFadeDistance;  // view Z (meters) where Demodulation has faded to 0 (fog), 0 = off
     float MaxRadiance;        // metrics: the denoiser's clamp, signals above it are counted
-    float2 Pad4;
+    uint ExposureTilesX;      // exposure tracking: 64x64 tiles of the render area
+    uint ExposureTilesY;
+    float Pad4;
 };
 
 #define SENTINEL_PASSTHROUGH 0
@@ -61,7 +57,6 @@ cbuffer Params : register(b0)
 #define FLAG_HAS_SPEC_HIT_DISTANCE 0x2
 #define FLAG_DEPTH_INVERTED 0x4
 #define FLAG_PARTICLE_LAYER 0x8     // particle layer (premultiplied, alpha = coverage) goes over the result
-#define FLAG_COUNT_SENTINELS 0x10   // prepass: count sentinel texels (only while the probe samples)
 #define FLAG_LINEAR_DEPTH 0x20      // the game's depth is already linear view Z (DLSS.Use.HW.Depth 0)
 #define FLAG_TRANSPARENCY_LAYER 0x40 // prepass got DLSSD.ColorBeforeTransparency, compose adds Color - that back
 #define FLAG_NORMALS_UNORM 0x80     // the game's normals are UNORM: xyz = 2 * v - 1
@@ -69,6 +64,8 @@ cbuffer Params : register(b0)
 #define FLAG_LAYER_OPACITY 0x200    // compose: the layer's coverage comes from DLSS.TransparencyLayerOpacity
 #define FLAG_DIFFUSE_HIT 0x400      // prepass: the game sends a diffuse hit distance (DiffuseHitDistance texture)
 #define FLAG_DIFFUSE_HIT_IN_W 0x800 // ... packed in .w (DLSSD.DiffuseRayDirectionHitDistance), else in .r
+#define FLAG_EXPOSURE 0x1000        // prepass/compose: signals are also divided by the tracked scene exposure
+#define FLAG_EXPOSURE_RESET 0x2000  // exposure: the denoiser's history restarts, so does the tracked exposure
 
 // Packed normals alpha: material type 0-3 / 3, the denoiser doesn't filter across different materials
 #define MATERIAL_SURFACE 0.0f            // type 0
@@ -122,18 +119,8 @@ bool GetModulation(float3 diffuseAlbedo, float3 specularAlbedo, float hwDepth, o
     if (IsSky(hwDepth))
         return false;
 
-    // Fog and haze come in the color with no albedo of their own: divided by the surface's albedo they turn into
-    // light the denoiser spreads over the surface, and the remodulated result shows the paint instead of the fog.
-    // Partial demodulation (exponent < 1), faded out with distance where fog dominates, keeps them as they are.
-    float exponent = Demodulation;
-
-    if (DemodFadeDistance > 0.0f)
-        exponent *= 1.0f - smoothstep(0.5f * DemodFadeDistance, DemodFadeDistance, LinearDepth(hwDepth));
-
-    dMod = pow(max(diffuseAlbedo, MinAlbedo), exponent);
-    sMod = pow(SplitMode == SPLIT_ALBEDO ? max(specularAlbedo, MinAlbedo)
-                                         : max(diffuseAlbedo + specularAlbedo, MinAlbedo),
-               exponent);
+    dMod = max(diffuseAlbedo, MinAlbedo);
+    sMod = SplitMode == SPLIT_ALBEDO ? max(specularAlbedo, MinAlbedo) : max(diffuseAlbedo + specularAlbedo, MinAlbedo);
 
     float lumD = dot(diffuseAlbedo, LumaWeights);
     float lumS = dot(specularAlbedo, LumaWeights);
@@ -183,6 +170,13 @@ float2 NormalToOctahedronUv(float3 N)
     float s = saturate(-N.z);
     N.xy = lerp(N.xy, (1.0 - abs(N.yx)) * k, s);
     return N.xy * 0.5 + 0.5;
+}
+
+// Exposure tracked by fsrd_exposure_reduce.hlsl (1x1, the game's exposure relative to when tracking started), 1 when
+// FLAG_EXPOSURE is off
+float SceneExposure(Texture2D<float> exposure)
+{
+    return (Flags & FLAG_EXPOSURE) ? max(exposure.Load(int3(0, 0, 0)), 1e-4f) : 1.0f;
 }
 
 bool IsFinite3(float3 v)

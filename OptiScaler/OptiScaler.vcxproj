@@ -515,7 +515,6 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="upscalers\dlssd\DLSSDFeature_Dx12.h" />
     <ClInclude Include="..\RayRegenBridge\feature\FSRDFeatureDx12.h" />
     <ClInclude Include="..\RayRegenBridge\feature\ffx_denoiser_compat.h" />
-    <ClInclude Include="..\RayRegenBridge\feature\FsrdProbe.h" />
     <ClInclude Include="..\RayRegenBridge\feature\FsrdFrameDump.h" />
     <ClInclude Include="..\RayRegenBridge\feature\FsrdRemote.h" />
     <ClInclude Include="..\RayRegenBridge\feature\FsrdMetrics.h" />
@@ -595,8 +594,9 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="..\RayRegenBridge\shaders\fsrd_prepass_Shader.h" />
     <ClInclude Include="..\RayRegenBridge\shaders\fsrd_compose_Shader.h" />
     <ClInclude Include="..\RayRegenBridge\shaders\fsrd_particles_Shader.h" />
-    <ClInclude Include="..\RayRegenBridge\shaders\fsrd_probe_Shader.h" />
     <ClInclude Include="..\RayRegenBridge\shaders\fsrd_dump_Shader.h" />
+    <ClInclude Include="..\RayRegenBridge\shaders\fsrd_exposure_tiles_Shader.h" />
+    <ClInclude Include="..\RayRegenBridge\shaders\fsrd_exposure_reduce_Shader.h" />
     <ClInclude Include="..\RayRegenBridge\shaders\fsrd_metrics_Shader.h" />
     <ClInclude Include="shaders\format_transfer\FT_Common.h" />
     <ClInclude Include="shaders\format_transfer\FT_Dx12.h" />
@@ -788,7 +788,6 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="upscalers\dlssd\DLSSDFeature_Dx11.cpp" />
     <ClCompile Include="upscalers\dlssd\DLSSDFeature_Dx12.cpp" />
     <ClCompile Include="..\RayRegenBridge\feature\FSRDFeatureDx12.cpp" />
-    <ClCompile Include="..\RayRegenBridge\feature\FsrdProbe.cpp" />
     <ClCompile Include="..\RayRegenBridge\feature\FsrdFrameDump.cpp" />
     <ClCompile Include="..\RayRegenBridge\feature\FsrdRemote.cpp" />
     <ClCompile Include="..\RayRegenBridge\feature\FsrdMetrics.cpp" />

@@ -424,25 +424,12 @@ bool Config::Reload(std::filesystem::path iniPath)
             if (auto setting = readFloat("FSRD", "FarPassthrough"); setting.has_value() && setting.value() >= 0.0f)
                 FsrdFarPassthrough.set_from_config(setting);
 
-            if (auto setting = readFloat("FSRD", "MirrorPassthrough");
-                setting.has_value() && setting.value() >= 0.0f && setting.value() <= 1.0f)
-                FsrdMirrorPassthrough.set_from_config(setting);
-
-            if (auto setting = readFloat("FSRD", "Demodulation");
-                setting.has_value() && setting.value() >= 0.0f && setting.value() <= 1.0f)
-                FsrdDemodulation.set_from_config(setting);
-
-            if (auto setting = readFloat("FSRD", "DemodFadeDistance"); setting.has_value() && setting.value() >= 0.0f)
-                FsrdDemodFadeDistance.set_from_config(setting);
-
-            if (auto setting = readFloat("FSRD", "SignalScale"); setting.has_value() && setting.value() > 0.0f)
-                FsrdSignalScale.set_from_config(setting);
+            FsrdExposureCompensation.set_from_config(readBool("FSRD", "ExposureCompensation"));
 
             if (auto setting = readFloat("FSRD", "DefaultSharpness");
                 setting.has_value() && setting.value() >= 0.0f && setting.value() <= 1.0f)
                 FsrdDefaultSharpness.set_from_config(setting);
 
-            FsrdDiagnostics.set_from_config(readBool("FSRD", "Diagnostics"));
             FsrdCaptureFolder.set_from_config(readString("FSRD", "CaptureFolder"));
 
             if (auto setting = readInt("FSRD", "SignalType"); setting.has_value() && setting >= 0 && setting <= 1)
@@ -1285,15 +1272,10 @@ bool Config::SaveIni()
         ini.SetValue("FSRD", "TransparencyLayer",
                      GetIntValue(Instance()->FsrdTransparencyLayer.value_for_config()).c_str());
         ini.SetValue("FSRD", "FarPassthrough", GetFloatValue(Instance()->FsrdFarPassthrough.value_for_config()).c_str());
-        ini.SetValue("FSRD", "MirrorPassthrough",
-                     GetFloatValue(Instance()->FsrdMirrorPassthrough.value_for_config()).c_str());
-        ini.SetValue("FSRD", "Demodulation", GetFloatValue(Instance()->FsrdDemodulation.value_for_config()).c_str());
-        ini.SetValue("FSRD", "DemodFadeDistance",
-                     GetFloatValue(Instance()->FsrdDemodFadeDistance.value_for_config()).c_str());
-        ini.SetValue("FSRD", "SignalScale", GetFloatValue(Instance()->FsrdSignalScale.value_for_config()).c_str());
+        ini.SetValue("FSRD", "ExposureCompensation",
+                     GetBoolValue(Instance()->FsrdExposureCompensation.value_for_config()).c_str());
         ini.SetValue("FSRD", "DefaultSharpness",
                      GetFloatValue(Instance()->FsrdDefaultSharpness.value_for_config()).c_str());
-        ini.SetValue("FSRD", "Diagnostics", GetBoolValue(Instance()->FsrdDiagnostics.value_for_config()).c_str());
         ini.SetValue("FSRD", "CaptureFolder",
                      Instance()->FsrdCaptureFolder.has_value() ? Instance()->FsrdCaptureFolder.value().c_str() : "auto");
         ini.SetValue("FSRD", "SignalType", GetIntValue(Instance()->FsrdSignalType.value_for_config()).c_str());

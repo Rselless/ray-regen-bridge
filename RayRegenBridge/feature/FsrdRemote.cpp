@@ -52,11 +52,8 @@ std::map<std::string, OptionPtr> Options()
         { "ParticleLayer", &c->FsrdParticleLayer },
         { "TransparencyLayer", &c->FsrdTransparencyLayer },
         { "FarPassthrough", &c->FsrdFarPassthrough },
-        { "MirrorPassthrough", &c->FsrdMirrorPassthrough },
-        { "Demodulation", &c->FsrdDemodulation },
-        { "DemodFadeDistance", &c->FsrdDemodFadeDistance },
+        { "ExposureCompensation", &c->FsrdExposureCompensation },
         { "DefaultSharpness", &c->FsrdDefaultSharpness },
-        { "SignalScale", &c->FsrdSignalScale },
         { "BypassDenoiser", &c->FsrdBypassDenoiser },
         { "StabilityBias", &c->FsrdStabilityBias },
         { "RadianceClipStdK", &c->FsrdRadianceClipStdK },
@@ -168,6 +165,7 @@ void Poll()
 
     std::ifstream in(taken);
     std::string line;
+    int added = 0;
 
     while (std::getline(in, line))
     {
@@ -175,11 +173,15 @@ void Poll()
             line.pop_back();
 
         if (!line.empty() && line[0] != '#')
+        {
             queue.push_back(line);
+            added++;
+        }
     }
 
     in.close();
     std::filesystem::remove(taken, ec);
+    FsrdRemote::Status(std::format("read {} commands, {} queued", added, queue.size()));
 }
 
 // Runs one command, false when it has to wait (it stays at the front of the queue)
