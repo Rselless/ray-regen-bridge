@@ -6,7 +6,7 @@
 
 Jogos como Cyberpunk 2077 só oferecem Ray Reconstruction (DLSS-RR) para placas NVIDIA. Este fork do OptiScaler intercepta esse pedido e o atende com o denoiser da AMD (FSR Ray Regeneration, `amd_fidelityfx_denoiser_dx12.dll`), seguido do upscale FSR que o OptiScaler já tinha.
 
-> **Status:** experimental. O Ray Reconstruction liga no jogo e o denoiser roda sem travar; a qualidade ainda está sendo ajustada. Testado só no Cyberpunk 2077 (DX12), numa RX 9070 XT.
+> **Status:** experimental. O Ray Reconstruction liga no jogo e o denoiser roda sem travar; a qualidade ainda está sendo ajustada. Testado no Cyberpunk 2077 e no The Witcher 3 (DX12), numa RX 9070 XT.
 
 ## Como funciona
 
