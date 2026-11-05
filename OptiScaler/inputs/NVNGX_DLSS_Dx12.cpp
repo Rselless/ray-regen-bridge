@@ -374,13 +374,15 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_D3D12_Shutdown(void)
 
     D3D12Device = nullptr;
 
+    // No feature when the game shuts NGX down before creating one, or after releasing it (Cyberpunk does at startup)
     const auto feature = State::Instance().currentFeature;
-    const bool usesDx12Dlss = feature->GetUpscalerType() == Upscaler::DLSS && feature->Api() == API::DX12;
+    const bool usesDx12Dlss =
+        feature != nullptr && feature->GetUpscalerType() == Upscaler::DLSS && feature->Api() == API::DX12;
 
     if (usesDx12Dlss)
     {
-        const auto dlssFeature = dynamic_cast<DLSSFeatureDx12*>(feature);
-        dlssFeature->Shutdown(D3D12Device);
+        if (const auto dlssFeature = dynamic_cast<DLSSFeatureDx12*>(feature); dlssFeature != nullptr)
+            dlssFeature->Shutdown(D3D12Device);
     }
 
     State::Instance().currentFeature = nullptr;
