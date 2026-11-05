@@ -414,6 +414,9 @@ bool Config::Reload(std::filesystem::path iniPath)
             if (auto setting = readInt("FSRD", "SentinelMode"); setting.has_value() && setting >= 0 && setting <= 1)
                 FsrdSentinelMode.set_from_config(setting);
 
+            if (auto setting = readInt("FSRD", "SilhouetteRepair"); setting.has_value() && setting >= 0 && setting <= 4)
+                FsrdSilhouetteRepair.set_from_config(setting);
+
             if (auto setting = readInt("FSRD", "ParticleLayer"); setting.has_value() && setting >= 0 && setting <= 2)
                 FsrdParticleLayer.set_from_config(setting);
 
@@ -1268,6 +1271,8 @@ bool Config::SaveIni()
         ini.SetValue("FSRD", "SpecHitDistanceScale",
                      GetFloatValue(Instance()->FsrdSpecHitDistanceScale.value_for_config()).c_str());
         ini.SetValue("FSRD", "SentinelMode", GetIntValue(Instance()->FsrdSentinelMode.value_for_config()).c_str());
+        ini.SetValue("FSRD", "SilhouetteRepair",
+                     GetIntValue(Instance()->FsrdSilhouetteRepair.value_for_config()).c_str());
         ini.SetValue("FSRD", "ParticleLayer", GetIntValue(Instance()->FsrdParticleLayer.value_for_config()).c_str());
         ini.SetValue("FSRD", "TransparencyLayer",
                      GetIntValue(Instance()->FsrdTransparencyLayer.value_for_config()).c_str());

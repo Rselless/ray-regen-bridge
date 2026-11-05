@@ -2871,6 +2871,14 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
                                "Passthrough: keep the game's color, no denoise\n"
                                "Denoise as diffuse: normal facing the camera, fully rough");
 
+                int silhouetteRepair = std::clamp(config->FsrdSilhouetteRepair.value_or_default(), 0, 4);
+                if (ImGui::SliderInt("Silhouette Repair", &silhouetteRepair, 0, 4,
+                                     silhouetteRepair > 0 ? "%d px" : "Off"))
+                    config->FsrdSilhouetteRepair = silhouetteRepair;
+
+                ShowHelpMarker("The denoiser darkens the pixels next to the sky (dark outline on silhouettes)\n"
+                               "They take the denoised light of the surface this many pixels further in");
+
                 if (config->FsrdRadianceClipStdK.has_value())
                 {
                     float clip = config->FsrdRadianceClipStdK.value();

@@ -43,7 +43,7 @@ cbuffer Params : register(b0)
     float MaxRadiance;        // metrics: the denoiser's clamp, signals above it are counted
     uint ExposureTilesX;      // exposure tracking: 64x64 tiles of the render area
     uint ExposureTilesY;
-    float Pad4;
+    uint SilhouetteRepair;    // compose: texels next to the sky take the signals this far in, 0 = off
 };
 
 #define SENTINEL_PASSTHROUGH 0

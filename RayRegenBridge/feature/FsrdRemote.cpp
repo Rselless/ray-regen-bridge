@@ -49,6 +49,7 @@ std::map<std::string, OptionPtr> Options()
         { "ReflectionReactive", &c->FsrdReflectionReactive },
         { "SpecHitDistanceScale", &c->FsrdSpecHitDistanceScale },
         { "SentinelMode", &c->FsrdSentinelMode },
+        { "SilhouetteRepair", &c->FsrdSilhouetteRepair },
         { "ParticleLayer", &c->FsrdParticleLayer },
         { "TransparencyLayer", &c->FsrdTransparencyLayer },
         { "FarPassthrough", &c->FsrdFarPassthrough },

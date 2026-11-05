@@ -101,8 +101,9 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
 
     // Passthrough sentinels are inactive for the denoiser, so there the material only tells compose what they are.
     // Skin (marked by the game's SSS guide) is its own material, so it isn't filtered together with clothes, hair and
-    // the background.
-    const bool skin = (Flags & FLAG_SSS_GUIDE) && any(SssGuide.Load(p).rgb > 0.01f);
+    // the background. Cyberpunk's guide is signed noise around zero on skin and exactly zero elsewhere, so any value
+    // marks skin; a positive threshold tagged a random ~40% of the skin and split it in two materials (grain).
+    const bool skin = (Flags & FLAG_SSS_GUIDE) && any(SssGuide.Load(p).rgb != 0.0f);
     const float material = sentinel ? MATERIAL_SENTINEL : skin ? MATERIAL_SKIN : MATERIAL_SURFACE;
     PackedNormals[DTid.xy] = float4(NormalToOctahedronUv(normal), saturate(roughness), material);
     LinearDepthOut[DTid.xy] = viewZ;

@@ -45,7 +45,7 @@ class FsrdPass_Dx12 : public Shader_Dx12
         float MaxRadiance;
         uint32_t ExposureTilesX;
         uint32_t ExposureTilesY;
-        float Pad4;
+        uint32_t SilhouetteRepair;
     };
 
   private:

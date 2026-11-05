@@ -1017,6 +1017,7 @@ FsrdPass_Dx12::Constants FSRDFeatureDx12::BuildConstants(const FrameInputs& in, 
     constants.CameraForward[1] = in.view[1][2];
     constants.CameraForward[2] = in.view[2][2];
     constants.SentinelMode = (uint32_t) sentinelMode;
+    constants.SilhouetteRepair = (uint32_t) std::clamp(config->FsrdSilhouetteRepair.value_or_default(), 0, 4);
 
     return constants;
 }
@@ -1306,7 +1307,7 @@ void FSRDFeatureDx12::RunFrameDump(ID3D12GraphicsCommandList* InCommandList, NVS
         "  \"kernelRelaxation\": {},\n  \"exposureCompensation\": {},\n"
         "  \"farPassthrough\": {},\n  \"transparencyLayer\": {},\n"
         "  \"particleLayer\": {},\n  \"signalType\": {},\n  \"sentinelMode\": {},\n"
-        "  \"reflectionReactive\": {},\n  \"exposureTexture\": {}",
+        "  \"reflectionReactive\": {},\n  \"silhouetteRepair\": {},\n  \"exposureTexture\": {}",
         in.renderWidth, in.renderHeight, DisplayWidth(), DisplayHeight(), constants.Flags, constants.PreExposure,
         constants.SplitMode, constants.DiffuseHitDistance, constants.SkyDepth, constants.ProjZZ, constants.ProjWZ,
         config->FsrdMaxRadiance.has_value() ? std::format("{}", config->FsrdMaxRadiance.value())
@@ -1316,7 +1317,7 @@ void FSRDFeatureDx12::RunFrameDump(ID3D12GraphicsCommandList* InCommandList, NVS
         config->FsrdFarPassthrough.value_or_default(),
         config->FsrdTransparencyLayer.value_or_default(), config->FsrdParticleLayer.value_or_default(),
         config->FsrdSignalType.value_or_default(), constants.SentinelMode, constants.ReflectionReactive,
-        _exposure != nullptr);
+        constants.SilhouetteRepair, _exposure != nullptr);
 
     const auto read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     const auto write = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
