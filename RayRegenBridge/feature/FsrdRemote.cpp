@@ -200,7 +200,8 @@ bool Execute(const std::string& line, FsrdFrameDump* dump, FsrdMetrics* metrics)
 
     auto startDump = [&](FsrdFrameDump::Request request)
     {
-        if (dump == nullptr)
+        // The dump runs with the denoiser; in bypass it would never start. The captured input color is the bypass image.
+        if (dump == nullptr || Config::Instance()->FsrdBypassDenoiser.value_or_default())
         {
             FsrdRemote::Status("error: " + line + ": no denoiser running");
             return true;

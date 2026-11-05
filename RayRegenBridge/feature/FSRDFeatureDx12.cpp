@@ -1248,9 +1248,6 @@ bool FSRDFeatureDx12::RunCompose(ID3D12GraphicsCommandList* InCommandList, NVSDK
 
 ID3D12Resource* FSRDFeatureDx12::Denoise(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters)
 {
-    // Commands from outside the game (RRB_Captures\command.txt): captures, option changes, messages
-    FsrdRemote::Tick(_frameDump.get(), _metrics.get());
-
     FrameInputs in {};
 
     if (!GatherInputs(InParameters, in))
@@ -1482,6 +1479,10 @@ bool FSRDFeatureDx12::EvaluateInternal(ID3D12GraphicsCommandList* InCommandList,
 
     _evalFrame++;
     ReleaseRetired();
+
+    // Commands from outside the game (RRB_Captures\command.txt): captures, option changes, messages. Every frame,
+    // also in bypass, or a "set BypassDenoiser 1" would stop the queue for good.
+    FsrdRemote::Tick(_frameDump.get(), _metrics.get());
 
     // ~30 s at 60 fps, only with live metrics
     if (_evalFrame % 1800 == 0 && FsrdMetrics::Enabled())
