@@ -80,6 +80,7 @@ Seção `[FSRD]` do `OptiScaler.ini`; a maioria também aparece no menu do OptiS
 | `FarPassthrough` | `0` (desligado) | Distância em metros a partir da qual a cena pula o denoiser e mantém a névoa distante do jogo |
 | `DefaultSharpness` | `0.25` | Nitidez RCAS quando nem o jogo nem o override de Sharpness definem uma |
 | `ExposureCompensation` | `true` | Acompanha a exposição automática do jogo (o Cyberpunk não informa) para o histórico do denoiser não ficar com o brilho antigo ao girar a câmera |
+| `SilhouetteRepair` | `4` | Pixels colados no céu saíam escuros (contorno preto nas silhuetas); eles usam a luz da superfície até 4 px para dentro. Fios e antenas finos ficam com a cor do jogo. `0` desliga |
 | `StabilityBias` | `0.5` | Quanto o denoiser confia no histórico; o padrão da AMD (1) trata névoa, vapor e sujeira como ruído e escurece a imagem |
 | `RadianceClipStdK`, `KernelRelaxation` | padrão da AMD | Ajuste fino do denoiser |
 
