@@ -302,7 +302,7 @@ class Config
     CustomOptional<float> FsrdReflectionReactive { 0.7f }; // reactive mask strength on smooth reflections
     CustomOptional<float> FsrdSpecHitDistanceScale { 1.0f }; // multiplier for the game's specular hit distance
     CustomOptional<int> FsrdSentinelMode { 0 }; // texels without G-buffer: 0 passthrough, 1 diffuse
-    CustomOptional<int> FsrdSilhouetteRepair { 3 }; // texels next to the sky take the signals this far in, 0 off
+    CustomOptional<int> FsrdSilhouetteRepair { 4 }; // texels next to the sky take the signals this far in, 0 off
     // Steam/smoke layer the game only sends in DLSSD.ColorBeforeParticles: 0 = off, 1 = over the denoised color,
     // 2 = debug, upscale that texture as is
     CustomOptional<int> FsrdParticleLayer { 1 };

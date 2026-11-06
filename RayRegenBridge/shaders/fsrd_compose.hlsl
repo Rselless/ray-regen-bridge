@@ -63,14 +63,17 @@ float3 OverParticles(float3 c, int3 p, inout float reactive)
 // The denoiser blends the inactive sky texels into the surface texels next to them, which come out ~40% darker: a
 // dark outline on every silhouette against the sky. Those texels take the average signals of the surface
 // SilhouetteRepair texels away, on the surface side (no sky in between) and at the same depth within 10%.
-// Measured on captures: 3 texels brings the outline from ~-50% to ~-20%; the darkening fades over a few texels.
-void DenoisedSignals(int3 p, out float3 diffuse, out float3 specular)
+// Measured on captures (BuryGer, Corpo Plaza): the outline goes from -25..-45% to -4..-11% with 4 texels; 3 left
+// some dark texels on distant roofs. The darkening fades over a few texels.
+// Thin structures (antennas, wires, twigs) have no surface that far in and came out ~75% darker, black lines: false
+// is returned for them and they keep the game's color, noisy but at the right brightness.
+bool DenoisedSignals(int3 p, out float3 diffuse, out float3 specular)
 {
     diffuse = DiffuseDenoised.Load(p).rgb;
     specular = SpecularDenoised.Load(p).rgb;
 
     if (SilhouetteRepair == 0)
-        return;
+        return true;
 
     static const int2 Offsets[8] = { int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1),
                                      int2(-1, -1), int2(1, -1), int2(-1, 1), int2(1, 1) };
@@ -84,7 +87,7 @@ void DenoisedSignals(int3 p, out float3 diffuse, out float3 specular)
         silhouette = silhouette || IsSky(Depth.Load(int3(clamp(p.xy + Offsets[i], 0, last), 0)));
 
     if (!silhouette)
-        return;
+        return true;
 
     float3 diffuseSum = 0.0f;
     float3 specularSum = 0.0f;
@@ -107,11 +110,12 @@ void DenoisedSignals(int3 p, out float3 diffuse, out float3 specular)
         count += 1.0f;
     }
 
-    if (count > 0.0f)
-    {
-        diffuse = diffuseSum / count;
-        specular = specularSum / count;
-    }
+    if (count == 0.0f)
+        return false;
+
+    diffuse = diffuseSum / count;
+    specular = specularSum / count;
+    return true;
 }
 
 [numthreads(16, 16, 1)]
@@ -168,14 +172,14 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
     }
 
     float3 diffuseDenoised, specularDenoised;
-    DenoisedSignals(p, diffuseDenoised, specularDenoised);
+    const bool repaired = DenoisedSignals(p, diffuseDenoised, specularDenoised);
 
     // Back to the game's pre-exposed units
     float3 specular = max(specularDenoised * sMod, 0.0f) * scale;
 
     float3 composed = max(diffuseDenoised * dMod, 0.0f) * scale + specular;
 
-    if (!IsFinite3(composed))
+    if (!repaired || !IsFinite3(composed))
     {
         Output[DTid.xy] = float4(OverParticles(color.rgb, p, gameReactive), color.a);
         Reactive[DTid.xy] = gameReactive;
